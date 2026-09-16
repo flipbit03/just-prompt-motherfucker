@@ -1,9 +1,8 @@
 //! Just Prompt, Motherfucker.
-//!
-//! The whole website: one binary, one SQLite file, no JavaScript. The
-//! manifesto is compiled in; see `render`.
 
+mod cookies;
 mod db;
+mod github;
 mod render;
 
 use std::error::Error;
@@ -11,14 +10,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    Router,
-    extract::State,
-    http::{StatusCode, header},
+    Form, Router,
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use clap::{Parser, Subcommand};
+use cookies::Intent;
 use rusqlite::Connection;
+use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::signal;
 
@@ -47,11 +48,13 @@ struct Config {
     bind: String,
     db: PathBuf,
     base_url: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
 }
 
 impl Config {
     /// Defaults are the local development values, so `cargo run` just works.
-    /// The deploy overrides all three through the systemd EnvironmentFile.
+    /// The deploy overrides them through the systemd EnvironmentFile.
     fn from_env() -> Self {
         let var =
             |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_string());
@@ -59,6 +62,12 @@ impl Config {
             bind: var("JPMF_BIND", "127.0.0.1:8100"),
             db: PathBuf::from(var("JPMF_DB", "jpmf.db")),
             base_url: var("JPMF_BASE_URL", "http://localhost:8100"),
+            client_id: std::env::var("JPMF_CLIENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            client_secret: std::env::var("JPMF_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 }
@@ -67,20 +76,21 @@ impl Config {
 struct App {
     db: Arc<Mutex<Connection>>,
     base_url: Arc<str>,
+    /// `None` without GitHub credentials: the site serves, signing 503s.
+    oauth: Option<github::Oauth>,
+    /// Secure cookies only over https, or the browser drops them in dev.
+    secure: bool,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let cli = Cli::parse();
     let cfg = Config::from_env();
 
     match cli.command.unwrap_or(Command::Serve) {
-        // Only `serve` needs an async runtime; `backup` is a few milliseconds
-        // of synchronous SQLite and has no business starting one.
+        // Only `serve` needs the async runtime.
         Command::Serve => tokio::runtime::Runtime::new()?.block_on(serve(cfg)),
         Command::Backup { dest } => {
-            // Without this guard SQLite would happily open a missing database,
-            // create it empty, and hand back a perfectly valid snapshot of
-            // nothing — the worst possible outcome for a backup command.
+            // SQLite would create a missing file and snapshot an empty database.
             if !cfg.db.exists() {
                 return Err(format!(
                     "no database at {} (set JPMF_DB, or run this from the directory holding it)",
@@ -98,16 +108,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-async fn serve(cfg: Config) -> Result<(), Box<dyn Error>> {
+async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
     let conn = db::open(&cfg.db, render::manifesto_sha())?;
+
+    let oauth = match (&cfg.client_id, &cfg.client_secret) {
+        (Some(id), Some(secret)) => Some(github::Oauth::new(
+            id.clone(),
+            secret.clone(),
+            &cfg.base_url,
+        )?),
+        _ => {
+            eprintln!("warning: JPMF_CLIENT_ID / JPMF_CLIENT_SECRET not set — signing is disabled");
+            None
+        }
+    };
+
     let app = App {
         db: Arc::new(Mutex::new(conn)),
         base_url: cfg.base_url.as_str().into(),
+        oauth,
+        secure: cfg.base_url.starts_with("https://"),
     };
 
     let router = Router::new()
         .route("/", get(index))
-        .route("/sign", post(sign))
+        .route("/sign", post(start_sign))
+        .route("/unsign", post(start_unsign))
+        .route("/unsign/confirm", post(confirm_unsign))
+        .route("/auth/callback", get(callback))
         .route("/healthz", get(healthz))
         .route("/robots.txt", get(robots))
         .with_state(app);
@@ -126,52 +154,326 @@ async fn serve(cfg: Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The manifesto, then everyone who signed it.
-///
-/// Rendered from SQLite on every request. At this scale that is well under a
-/// millisecond, and it means there is no cache to invalidate when someone
-/// signs — they refresh and they are simply there.
-async fn index(State(app): State<App>) -> Response {
+// ---------------------------------------------------------------- rendering
+
+fn oops(app: &App, status: StatusCode, heading: &str, body: &str) -> Response {
+    (status, Html(render::notice(&app.base_url, heading, body))).into_response()
+}
+
+/// The manifesto, then everyone who signed it. Rendered per request so there
+/// is no cache to invalidate when someone signs.
+async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
+    // Reuse the existing cookie so a form open in another tab still submits.
+    let csrf = cookies::get(&headers, cookies::CSRF).unwrap_or_else(cookies::token);
+
     let rendered = (|| -> rusqlite::Result<String> {
-        // Short critical section, and nothing is awaited while the lock is
-        // held, so a std Mutex is the right tool here.
+        // Nothing is awaited while the lock is held.
         let conn = app
             .db
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let count = db::count(&conn)?;
         let signers = db::signatures(&conn)?;
-        Ok(render::page(&app.base_url, count, &signers))
+        Ok(render::page(&app.base_url, &csrf, count, &signers))
     })();
 
     match rendered {
-        Ok(html) => Html(html).into_response(),
+        Ok(html) => (
+            [(
+                header::SET_COOKIE,
+                cookies::set(cookies::CSRF, &csrf, cookies::CSRF_MAX_AGE, app.secure),
+            )],
+            Html(html),
+        )
+            .into_response(),
         Err(err) => {
             eprintln!("database error while rendering the page: {err}");
-            (
+            oops(
+                &app,
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Html(render::notice(
-                    &app.base_url,
-                    "Something broke",
-                    "The manifesto is fine. The database is not. Try again in a moment.",
-                )),
+                "Something broke",
+                "The manifesto is fine. The database is not. Try again in a moment.",
             )
-                .into_response()
         }
     }
 }
 
-async fn sign(State(app): State<App>) -> Response {
+// ------------------------------------------------------------ starting a flow
+
+#[derive(Deserialize)]
+struct CsrfForm {
+    csrf: String,
+}
+
+/// Send someone to GitHub to prove who they are.
+///
+/// The CSRF check guards the way *in*. The state cookie only guards the
+/// callback, and we set that cookie ourselves, so without this a cross-site
+/// POST could start a flow: GitHub skips consent for anyone already
+/// authorised, and they would be signed or unsigned silently.
+fn begin(app: &App, headers: &HeaderMap, submitted: &str, intent: Intent) -> Response {
+    let expected = cookies::get(headers, cookies::CSRF);
+    if expected.as_deref() != Some(submitted) || submitted.is_empty() {
+        return oops(
+            app,
+            StatusCode::BAD_REQUEST,
+            "That request did not come from the page",
+            "Go back to the manifesto and press the button there.",
+        );
+    }
+
+    let Some(oauth) = app.oauth.as_ref() else {
+        return oops(
+            app,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing is not configured",
+            "This copy of the site is running without GitHub credentials.",
+        );
+    };
+
+    let state = cookies::state_value(intent);
+    let url = oauth.authorize_url(&state);
     (
-        StatusCode::NOT_IMPLEMENTED,
-        Html(render::notice(
-            &app.base_url,
-            "Not wired up yet",
-            "Signing goes through GitHub, and that part has not been built. Soon.",
-        )),
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, url),
+            (
+                header::SET_COOKIE,
+                cookies::set(cookies::STATE, &state, cookies::STATE_MAX_AGE, app.secure),
+            ),
+        ],
     )
         .into_response()
 }
+
+async fn start_sign(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> Response {
+    begin(&app, &headers, &form.csrf, Intent::Sign)
+}
+
+async fn start_unsign(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> Response {
+    begin(&app, &headers, &form.csrf, Intent::Unsign)
+}
+
+// ---------------------------------------------------------------- the callback
+
+#[derive(Deserialize)]
+struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn callback(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Query(q): Query<CallbackQuery>,
+) -> Response {
+    let clear = cookies::clear(cookies::STATE, app.secure);
+
+    // Cancelling on GitHub's consent screen is not an error.
+    if q.error.is_some() {
+        return (
+            StatusCode::SEE_OTHER,
+            [
+                (header::LOCATION, "/".to_string()),
+                (header::SET_COOKIE, clear),
+            ],
+        )
+            .into_response();
+    }
+
+    let (Some(code), Some(state)) = (q.code, q.state) else {
+        return oops(
+            &app,
+            StatusCode::BAD_REQUEST,
+            "That link is incomplete",
+            "Start again from the manifesto.",
+        );
+    };
+
+    // Compared whole: a forged query string cannot match a cookie an attacker
+    // was never able to set.
+    if cookies::get(&headers, cookies::STATE).as_deref() != Some(state.as_str()) {
+        return oops(
+            &app,
+            StatusCode::BAD_REQUEST,
+            "That took too long",
+            "Your sign-in expired or came back to the wrong place. Try again.",
+        );
+    }
+
+    let Some(intent) = cookies::state_intent(&state) else {
+        return oops(
+            &app,
+            StatusCode::BAD_REQUEST,
+            "That link is malformed",
+            "Start again from the manifesto.",
+        );
+    };
+
+    let Some(oauth) = app.oauth.as_ref() else {
+        return oops(
+            &app,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing is not configured",
+            "This copy of the site is running without GitHub credentials.",
+        );
+    };
+
+    // Both network calls finish before any lock is taken.
+    let user = match oauth.exchange(&code).await {
+        Ok(token) => match oauth.user(&token).await {
+            Ok(user) => user,
+            Err(err) => {
+                eprintln!("github /user failed: {err}");
+                return oops(
+                    &app,
+                    StatusCode::BAD_GATEWAY,
+                    "GitHub is having a moment",
+                    "It would not tell us who you are. Try again shortly.",
+                );
+            }
+        },
+        Err(err) => {
+            eprintln!("token exchange failed: {err}");
+            return oops(
+                &app,
+                StatusCode::BAD_REQUEST,
+                "That took too long",
+                "GitHub would not accept the sign-in. Go back and try again.",
+            );
+        } // The token drops here. It is never stored.
+    };
+
+    match intent {
+        Intent::Sign => {
+            let result = {
+                let conn = app
+                    .db
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                db::sign(&conn, user.id, &user.login, render::manifesto_sha())
+            };
+            match result {
+                Ok(ordinal) => {
+                    println!("signed: {} (#{ordinal})", user.login);
+                    (
+                        StatusCode::SEE_OTHER,
+                        [
+                            (header::LOCATION, "/#signatures".to_string()),
+                            (header::SET_COOKIE, clear),
+                        ],
+                    )
+                        .into_response()
+                }
+                Err(err) => {
+                    eprintln!("could not record signature for {}: {err}", user.login);
+                    oops(
+                        &app,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "We could not write that down",
+                        "GitHub vouched for you but the database would not take it.",
+                    )
+                }
+            }
+        }
+
+        Intent::Unsign => {
+            let found = {
+                let conn = app
+                    .db
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let existing = db::find(&conn, user.id);
+                match existing {
+                    Ok(Some(sig)) => {
+                        let token = cookies::token();
+                        db::pending_unsign_create(&conn, &token, user.id)
+                            .map(|()| Some((sig, token)))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(err) => Err(err),
+                }
+            };
+
+            match found {
+                Ok(Some((sig, token))) => (
+                    [(header::SET_COOKIE, clear)],
+                    Html(render::confirm_unsign(
+                        &app.base_url,
+                        &sig.login,
+                        sig.ordinal,
+                        &token,
+                    )),
+                )
+                    .into_response(),
+                Ok(None) => oops(
+                    &app,
+                    StatusCode::NOT_FOUND,
+                    "You have not signed it",
+                    "There is nothing to remove. You are welcome to sign, though.",
+                ),
+                Err(err) => {
+                    eprintln!("could not prepare removal for {}: {err}", user.login);
+                    oops(
+                        &app,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Something broke",
+                        "Try again in a moment.",
+                    )
+                }
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct TokenForm {
+    token: String,
+}
+
+async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> Response {
+    let outcome = {
+        let conn = app
+            .db
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match db::pending_unsign_take(&conn, &form.token) {
+            Ok(Some(github_id)) => db::unsign(&conn, github_id).map(Some),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
+        }
+    };
+
+    match outcome {
+        Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
+        Ok(None) => oops(
+            &app,
+            StatusCode::BAD_REQUEST,
+            "That confirmation expired",
+            "Removal links last five minutes and work once. Start again if you still want to.",
+        ),
+        Err(err) => {
+            eprintln!("could not remove signature: {err}");
+            oops(
+                &app,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Something broke",
+                "Your signature is still there. Try again in a moment.",
+            )
+        }
+    }
+}
+
+// -------------------------------------------------------------------- plumbing
 
 /// The deploy gates on this before it calls a release healthy.
 async fn healthz() -> &'static str {

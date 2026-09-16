@@ -33,10 +33,10 @@ jobs:
         with:
           workspaces: app
 
-      # musl so the binary carries its own libc and does not care what the VPS
-      # is running. rusqlite's `bundled` feature compiles SQLite in the same way.
+      # musl so the binary carries its own libc. musl-gcc is for
+      # libsqlite3-sys (bundled); cmake is for aws-lc-rs, reqwest's TLS backend.
       - name: install musl tooling
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake
 
       - name: build
         working-directory: app

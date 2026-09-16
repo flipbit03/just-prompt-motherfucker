@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, OptionalExtension as _, Result};
 
 /// A signature as the page needs it. Everything else stays in the database.
 pub struct Signature {
@@ -11,10 +11,9 @@ pub struct Signature {
     pub login: String,
 }
 
-/// `ordinal` is AUTOINCREMENT rather than a plain INTEGER PRIMARY KEY on
-/// purpose. Without it SQLite reuses the highest rowid after a delete, so the
-/// next person to sign would silently inherit a departed signer's number. The
-/// numbers are the one thing we promised never changes, so the gaps stay.
+/// AUTOINCREMENT, not a plain INTEGER PRIMARY KEY: without it SQLite reuses
+/// the highest rowid after a delete and the next signer inherits a departed
+/// one's number. Gaps are correct.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS signatures (
     ordinal       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,11 +24,18 @@ CREATE TABLE IF NOT EXISTS signatures (
     hidden_at     TEXT,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- With no sessions, this carries a proven identity from the OAuth callback to
+-- the confirm button, for five minutes.
+CREATE TABLE IF NOT EXISTS pending_unsign (
+    token      TEXT    PRIMARY KEY,
+    github_id  INTEGER NOT NULL,
+    expires_at TEXT    NOT NULL
+);
 ";
 
-/// Leandro and Cadu sign in the body of the manifesto, not in the list below
-/// it. Seeding them as rows 1 and 2 keeps the count honest without a magic
-/// `+ 2` anywhere, and leaves the first real signer at #3.
+/// Seeded as rows 1 and 2 because they sign in the body, not the list. Keeps
+/// the count honest with no offset, and leaves the first signer at #3.
 const FOUNDERS: [(i64, &str); 2] = [(385_640, "leandronsp"), (5_620_032, "flipbit03")];
 
 pub fn open(path: &Path, manifesto_sha: &str) -> Result<Connection> {
@@ -81,14 +87,75 @@ pub fn signatures(conn: &Connection) -> Result<Vec<Signature>> {
     rows.collect()
 }
 
-/// Write a consistent snapshot to `dest`.
-///
-/// `VACUUM INTO` runs inside a read transaction and writes a single compact
-/// file with the WAL already folded in, so the result is safe to copy away
-/// while the site is serving. It refuses to overwrite an existing file, which
-/// is the behaviour we want from a command someone runs by hand.
+/// `VACUUM INTO` runs in a read transaction and writes one compact file with
+/// the WAL folded in, so this is safe while the site is serving. It refuses to
+/// overwrite.
 pub fn backup(src: &Path, dest: &Path) -> Result<()> {
     let conn = Connection::open(src)?;
     conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
     Ok(())
+}
+
+/// Record a signature, or refresh a known signer's handle. Returns their
+/// ordinal. The narrow DO UPDATE keeps repeat signing from issuing a new
+/// number or un-hiding a moderated row.
+pub fn sign(conn: &Connection, github_id: i64, login: &str, manifesto_sha: &str) -> Result<i64> {
+    conn.query_row(
+        "INSERT INTO signatures (github_id, login, manifesto_sha)
+              VALUES (?1, ?2, ?3)
+         ON CONFLICT(github_id) DO UPDATE SET login = excluded.login
+           RETURNING ordinal",
+        rusqlite::params![github_id, login, manifesto_sha],
+        |row| row.get(0),
+    )
+}
+
+/// Used by the confirmation page to name the number about to be given up.
+pub fn find(conn: &Connection, github_id: i64) -> Result<Option<Signature>> {
+    conn.query_row(
+        "SELECT ordinal, login FROM signatures WHERE github_id = ?1",
+        [github_id],
+        |row| {
+            Ok(Signature {
+                ordinal: row.get(0)?,
+                login: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// A real delete: they asked for their data gone. `hidden_at` is for
+/// moderation, where the record should survive.
+pub fn unsign(conn: &Connection, github_id: i64) -> Result<bool> {
+    let removed = conn.execute("DELETE FROM signatures WHERE github_id = ?1", [github_id])?;
+    Ok(removed > 0)
+}
+
+pub fn pending_unsign_create(conn: &Connection, token: &str, github_id: i64) -> Result<()> {
+    // Nothing else cleans this table, so every insert sweeps it.
+    conn.execute(
+        "DELETE FROM pending_unsign WHERE expires_at < datetime('now')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO pending_unsign (token, github_id, expires_at)
+         VALUES (?1, ?2, datetime('now', '+5 minutes'))",
+        rusqlite::params![token, github_id],
+    )?;
+    Ok(())
+}
+
+/// Consume a pending confirmation. Single use: a valid row is deleted by the
+/// same statement that reads it, so a token cannot be replayed. An expired one
+/// matches nothing here and is left for the sweep in `pending_unsign_create`.
+pub fn pending_unsign_take(conn: &Connection, token: &str) -> Result<Option<i64>> {
+    conn.query_row(
+        "DELETE FROM pending_unsign
+               WHERE token = ?1 AND expires_at >= datetime('now')
+           RETURNING github_id",
+        [token],
+        |row| row.get(0),
+    )
+    .optional()
 }

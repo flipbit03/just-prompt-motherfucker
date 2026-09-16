@@ -1,5 +1,4 @@
-/* The whole stylesheet. Inlined into <head> at build time, so the page is
-   exactly one request and there is no static asset route to serve. */
+/* Inlined into <head> at build time; there is no static asset route. */
 
 :root {
   color-scheme: light dark;
@@ -150,3 +149,18 @@ footer a { color: var(--muted); }
   .signers { columns: 1; }
   table { display: block; overflow-x: auto; }
 }
+
+/* A real form, but it should read as an aside, not a second button. */
+.unsign { margin-top: 1.2em; }
+
+.unsign button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.unsign button:hover { background: none; color: var(--fg); }

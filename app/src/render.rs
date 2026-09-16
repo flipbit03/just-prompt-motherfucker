@@ -1,9 +1,5 @@
-//! Turning the embedded manifesto and the signature list into one HTML page.
-//!
-//! `page` is a pure function of its inputs. That is deliberate: rendering from
-//! the database on every request is fine at this scale, and keeping the render
-//! pure means putting a cache in front of it later is a small diff rather than
-//! a rewrite.
+//! The manifesto and the signature list, as one HTML page. `page` is pure, so
+//! a cache can be dropped in front of it later without restructuring.
 
 use std::fmt::Write as _;
 use std::sync::OnceLock;
@@ -13,9 +9,8 @@ use sha2::{Digest, Sha256};
 
 use crate::db::Signature;
 
-/// The manifesto is compiled into the binary; the binary is the website.
 /// `include_str!` registers the file as a build dependency, so editing the
-/// markdown rebuilds automatically with no build script.
+/// markdown triggers a rebuild without a build script.
 const MANIFESTO_MD: &str = include_str!("../../manifesto/MANIFESTO.md");
 const STYLE: &str = include_str!("../assets/style.css");
 
@@ -26,9 +21,8 @@ const DESCRIPTION: &str = "We are tired of harness engineering, agent orchestrat
                            way of shipping software.";
 const REPO_URL: &str = "https://github.com/flipbit03/just-prompt-motherfucker";
 
-/// sha256 of the manifesto exactly as this build embeds it. Stored with every
-/// signature so "what did #47 actually sign" stays answerable after an edit.
-/// Never shown in the UI.
+/// sha256 of the manifesto as this build embeds it. Stored per signature so
+/// the exact text someone signed stays identifiable after an edit.
 pub fn manifesto_sha() -> &'static str {
     static SHA: OnceLock<String> = OnceLock::new();
     SHA.get_or_init(|| {
@@ -45,7 +39,7 @@ pub fn manifesto_sha() -> &'static str {
 fn manifesto_html() -> &'static str {
     static HTML: OnceLock<String> = OnceLock::new();
     HTML.get_or_init(|| {
-        // Without ENABLE_TABLES the "Our values" table renders as literal pipes.
+        // Without ENABLE_TABLES the values table renders as literal pipes.
         let mut opts = Options::empty();
         opts.insert(Options::ENABLE_TABLES);
         let mut out = String::new();
@@ -68,7 +62,7 @@ fn esc(raw: &str) -> String {
     out
 }
 
-/// 1204 -> "1,204". The list is meant to get long enough for this to matter.
+/// 1204 -> "1,204".
 fn thousands(n: i64) -> String {
     let digits = n.abs().to_string();
     let mut out = String::new();
@@ -94,12 +88,8 @@ fn head(base_url: &str, s: &mut String) {
     );
     let _ = writeln!(s, "<link rel=\"canonical\" href=\"{}\">", esc(&url));
 
-    // Open Graph. Every crawler gets the full page body too — this markup only
-    // exists to make the unfurl card look like something.
-    //
-    // TODO: og:image once the 1200x630 PNG exists. Deliberately omitted rather
-    // than pointed at a URL that 404s, because Facebook caches a bad first
-    // scrape more or less forever.
+    // TODO: og:image once the 1200x630 PNG exists. Omitted rather than
+    // pointed at a 404 — Facebook caches a bad first scrape indefinitely.
     s.push_str("<meta property=\"og:type\" content=\"website\">\n");
     let _ = writeln!(s, "<meta property=\"og:url\" content=\"{}\">", esc(&url));
     let _ = writeln!(s, "<meta property=\"og:title\" content=\"{}\">", esc(TITLE));
@@ -131,7 +121,7 @@ fn footer(s: &mut String) {
 }
 
 /// The front page: the manifesto, then everyone who has signed it.
-pub fn page(base_url: &str, count: i64, signers: &[Signature]) -> String {
+pub fn page(base_url: &str, csrf: &str, count: i64, signers: &[Signature]) -> String {
     let mut s = String::with_capacity(32 * 1024);
     head(base_url, &mut s);
 
@@ -166,12 +156,51 @@ pub fn page(base_url: &str, count: i64, signers: &[Signature]) -> String {
         s.push_str("</ol>\n");
     }
 
-    // A form POST rather than a link: a GET endpoint would be followed by every
-    // crawler and link prefetcher on the internet, each one bounced to GitHub
-    // for nothing. Still zero JavaScript.
-    s.push_str("<form method=\"post\" action=\"/sign\">\n<button>Sign it</button>\n</form>\n");
+    // POST, not a link: a GET would be followed by crawlers and prefetchers.
+    // The hidden field is the twin of the jpmf_csrf cookie.
+    let _ = write!(
+        s,
+        "<form method=\"post\" action=\"/sign\">\n\
+         <input type=\"hidden\" name=\"csrf\" value=\"{}\">\n\
+         <button>Sign it</button>\n</form>\n",
+        esc(csrf)
+    );
+    let _ = write!(
+        s,
+        "<form method=\"post\" action=\"/unsign\" class=\"unsign\">\n\
+         <input type=\"hidden\" name=\"csrf\" value=\"{}\">\n\
+         <button type=\"submit\">Signed by mistake? Remove my signature</button>\n</form>\n",
+        esc(csrf)
+    );
     s.push_str("</section>\n</main>\n");
 
+    footer(&mut s);
+    s
+}
+
+/// Confirmation before removal: ordinals are permanent, so unsigning gives up
+/// a number for good and should not happen on a single click.
+pub fn confirm_unsign(base_url: &str, login: &str, ordinal: i64, token: &str) -> String {
+    let mut s = String::with_capacity(8 * 1024);
+    head(base_url, &mut s);
+    s.push_str("<main>\n<h1>Remove your signature?</h1>\n");
+    let _ = writeln!(
+        s,
+        "<p>GitHub says you are <strong>{}</strong>, signature <strong>#{ordinal}</strong>.</p>",
+        esc(login)
+    );
+    s.push_str(
+        "<p>Numbers are permanent and never reused. If you sign again later you \
+         will get a new one at the end of the list, not this one back.</p>\n",
+    );
+    let _ = write!(
+        s,
+        "<form method=\"post\" action=\"/unsign/confirm\">\n\
+         <input type=\"hidden\" name=\"token\" value=\"{}\">\n\
+         <button>Yes, remove #{ordinal}</button>\n</form>\n",
+        esc(token)
+    );
+    s.push_str("<p><a href=\"/\">No, keep it</a></p>\n</main>\n");
     footer(&mut s);
     s
 }
@@ -213,7 +242,7 @@ mod tests {
 
     #[test]
     fn empty_list_still_shows_the_count() {
-        let html = page("http://localhost:8100", 2, &[]);
+        let html = page("http://localhost:8100", "csrf0", 2, &[]);
         assert!(html.contains("2 signatures and counting"));
         assert!(html.contains("Nobody yet"));
     }
@@ -230,7 +259,7 @@ mod tests {
                 login: "later".into(),
             },
         ];
-        let html = page("http://localhost:8100", 4, &signers);
+        let html = page("http://localhost:8100", "csrf0", 4, &signers);
         assert!(html.contains("#3"));
         // A gap, because #4..#6 unsigned. The numbers must not be renumbered.
         assert!(html.contains("#7"));
@@ -243,7 +272,7 @@ mod tests {
             ordinal: 3,
             login: "<script>".into(),
         }];
-        let html = page("http://localhost:8100", 3, &signers);
+        let html = page("http://localhost:8100", "csrf0", 3, &signers);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }
