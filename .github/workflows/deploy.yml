@@ -1,0 +1,103 @@
+# GitHub RELEASES deploy to prod. Cut one with
+# `gh release create vX.Y.Z --generate-notes`; workflow_dispatch is the manual
+# escape hatch.
+#
+# There is no container, no registry and no compose file: the unit of deploy is
+# a single static binary. ~jpmf/jpmf_deploy/ holds that binary, the .env the
+# deploy writes, and jpmf.db — which is the one thing here that is NOT
+# disposable and which nothing in this workflow ever touches.
+name: deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://www.just-prompt-motherfucker.com
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      # musl so the binary carries its own libc and does not care what the VPS
+      # is running. rusqlite's `bundled` feature compiles SQLite in the same way.
+      - name: install musl tooling
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: build
+        working-directory: app
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Push binary and unit (self-healing — creates the dirs)
+        uses: appleboy/scp-action@v1
+        with:
+          host: outpost.flipbit03.com
+          username: jpmf
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: app/target/x86_64-unknown-linux-musl/release/jpmf
+          target: /home/jpmf/jpmf_deploy/
+          strip_components: 5
+
+      - name: Push the systemd unit
+        uses: appleboy/scp-action@v1
+        with:
+          host: outpost.flipbit03.com
+          username: jpmf
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: infra/jpmf.service
+          target: /home/jpmf/.config/systemd/user/
+          strip_components: 1
+
+      - name: Write env, install, restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: outpost.flipbit03.com
+          username: jpmf
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 5m
+          envs: CLIENT_ID,CLIENT_SECRET
+          script: |
+            set -euo pipefail
+            # Without this, `systemctl --user` over non-interactive SSH cannot
+            # find the bus and every deploy fails with "Failed to connect".
+            export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
+            umask 077
+            printf 'JPMF_BIND=127.0.0.1:8100\nJPMF_DB=%s\nJPMF_BASE_URL=%s\nJPMF_CLIENT_ID=%s\nJPMF_CLIENT_SECRET=%s\n' \
+              "/home/jpmf/jpmf_deploy/jpmf.db" \
+              "https://www.just-prompt-motherfucker.com" \
+              "$CLIENT_ID" "$CLIENT_SECRET" > ~/jpmf_deploy/.env
+
+            # scp cannot write over a running executable (ETXTBSY), but rename
+            # can: the old inode stays alive until the process exits.
+            chmod 0755 ~/jpmf_deploy/jpmf
+            systemctl --user daemon-reload
+            systemctl --user enable jpmf
+            systemctl --user restart jpmf
+
+            for i in $(seq 1 30); do
+              if curl -sf -o /dev/null http://127.0.0.1:8100/healthz; then
+                echo "healthy after ${i}s"; exit 0
+              fi
+              sleep 1
+            done
+            echo "jpmf never became healthy"
+            journalctl --user -u jpmf -n 50 --no-pager
+            exit 1
+        env:
+          CLIENT_ID: ${{ secrets.JPMF_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.JPMF_CLIENT_SECRET }}

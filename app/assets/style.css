@@ -1,0 +1,152 @@
+/* The whole stylesheet. Inlined into <head> at build time, so the page is
+   exactly one request and there is no static asset route to serve. */
+
+:root {
+  color-scheme: light dark;
+  --fg: #111;
+  --bg: #fff;
+  --rule: #111;
+  --th-bg: #eee;
+  --muted: #555;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6e4e1;
+    --bg: #15171b;
+    --rule: #444a53;
+    --th-bg: #1f232a;
+    --muted: #979da7;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  max-width: 42em;
+  margin: 3em auto;
+  padding: 0 1.5em;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+  font-size: 1.1em;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1 {
+  font-size: 3em;
+  text-align: center;
+  margin: 0;
+  line-height: 1.1;
+}
+
+/* The subtitle: the paragraph immediately after the title. */
+h1 + p {
+  text-align: center;
+  font-style: italic;
+  font-size: 1.4em;
+  margin: 0.3em 0 2em;
+}
+
+h2 { font-size: 1.6em; margin-top: 2em; }
+
+ul { padding-left: 1.2em; }
+li { margin: 0.6em 0; }
+
+a { color: var(--fg); }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5em 0;
+}
+
+th, td {
+  border: 1px solid var(--rule);
+  padding: 0.5em 0.7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th { background: var(--th-bg); }
+
+blockquote {
+  margin: 1.5em 0;
+  padding-left: 1em;
+  border-left: 4px solid var(--rule);
+  font-style: italic;
+}
+
+/* The signature block, appended below the manifesto. */
+
+.signatures {
+  margin-top: 3.5em;
+  border-top: 1px solid var(--rule);
+  padding-top: 1em;
+}
+
+.count {
+  color: var(--muted);
+  font-style: italic;
+  margin-top: -0.4em;
+}
+
+.signers {
+  list-style: none;
+  padding: 0;
+  margin: 1.5em 0;
+  columns: 2;
+  column-gap: 2em;
+}
+
+@media (min-width: 40em) {
+  .signers { columns: 3; }
+}
+
+.signers li {
+  break-inside: avoid;
+  margin: 0.3em 0;
+  line-height: 1.4;
+}
+
+.signers .n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.4em;
+  font-size: 0.9em;
+}
+
+.nobody {
+  color: var(--muted);
+  font-style: italic;
+}
+
+button {
+  font-family: inherit;
+  font-size: 1.05em;
+  padding: 0.6em 1.4em;
+  background: var(--fg);
+  color: var(--bg);
+  border: 2px solid var(--fg);
+  cursor: pointer;
+}
+
+button:hover { background: var(--bg); color: var(--fg); }
+
+footer {
+  margin-top: 3em;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+footer a { color: var(--muted); }
+
+/* Phones: the title needs to stop shouting, and the table needs an escape. */
+@media (max-width: 30em) {
+  body { margin: 1.5em auto; font-size: 1.05em; }
+  h1 { font-size: 2.1em; }
+  h1 + p { font-size: 1.2em; }
+  .signers { columns: 1; }
+  table { display: block; overflow-x: auto; }
+}
