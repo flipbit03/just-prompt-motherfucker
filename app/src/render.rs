@@ -148,9 +148,9 @@ pub fn page(base_url: &str, csrf: &str, count: i64, signers: &[Signature]) -> St
             let login = esc(&sig.login);
             let _ = writeln!(
                 s,
-                "<li><span class=\"n\">#{}</span><a href=\"https://github.com/{login}\" \
+                "<li id=\"s{n}\"><span class=\"n\">#{n}</span><a href=\"https://github.com/{login}\" \
                  rel=\"nofollow ugc\">{login}</a></li>",
-                sig.ordinal
+                n = sig.ordinal
             );
         }
         s.push_str("</ol>\n");
@@ -261,6 +261,9 @@ mod tests {
         ];
         let html = page("http://localhost:8100", "csrf0", 4, &signers);
         assert!(html.contains("#3"));
+        // Anchored so a fresh signer lands on their own line.
+        assert!(html.contains("id=\"s3\""));
+        assert!(html.contains("id=\"s7\""));
         // A gap, because #4..#6 unsigned. The numbers must not be renumbered.
         assert!(html.contains("#7"));
         assert!(html.contains("rel=\"nofollow ugc\""));

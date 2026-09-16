@@ -363,16 +363,33 @@ async fn callback(
                 db::sign(&conn, user.id, &user.login, render::manifesto_sha())
             };
             match result {
-                Ok(ordinal) => {
-                    println!("signed: {} (#{ordinal})", user.login);
-                    (
-                        StatusCode::SEE_OTHER,
-                        [
-                            (header::LOCATION, "/#signatures".to_string()),
-                            (header::SET_COOKIE, clear),
-                        ],
-                    )
-                        .into_response()
+                Ok(signed) => {
+                    println!("signed: {} (#{})", user.login, signed.ordinal);
+                    if signed.in_body {
+                        // Leandro and Cadu are named in the manifesto, so they
+                        // never appear in the list and would otherwise land
+                        // back on a page that looks unchanged.
+                        (
+                            [(header::SET_COOKIE, clear)],
+                            Html(render::notice(
+                                &app.base_url,
+                                "You are already in it",
+                                "You are named in the manifesto itself, so you do not appear \
+                                 again in the list below it.",
+                            )),
+                        )
+                            .into_response()
+                    } else {
+                        // Anchor on their own line, so they land on it.
+                        (
+                            StatusCode::SEE_OTHER,
+                            [
+                                (header::LOCATION, format!("/#s{}", signed.ordinal)),
+                                (header::SET_COOKIE, clear),
+                            ],
+                        )
+                            .into_response()
+                    }
                 }
                 Err(err) => {
                     eprintln!("could not record signature for {}: {err}", user.login);
@@ -454,7 +471,12 @@ async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> 
     };
 
     match outcome {
-        Ok(Some(_)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
+        Ok(Some(Some(gone))) => {
+            println!("removed: {} (#{})", gone.login, gone.ordinal);
+            (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response()
+        }
+        // The pending token was valid but the row had already gone.
+        Ok(Some(None)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
         Ok(None) => oops(
             &app,
             StatusCode::BAD_REQUEST,
