@@ -48,6 +48,9 @@ h2 {
   line-height: 1.2;
 }
 
+/* Unused by the manifesto as it currently reads, and kept anyway: a text edit
+   or a translation can reintroduce a list, and default list styling sits badly
+   in a centred column. */
 ul {
   padding-left: 0;
   list-style-position: inside;
@@ -77,34 +80,6 @@ td:last-child {
 }
 
 th { background: var(--th-bg); }
-
-/* The divider between the prose and the values table. The markdown says `---`,
-   which is what it actually is; the asterisks are presentation.
-
-   The rule needs a real box: with `border: none` it has zero height, the glyphs
-   render outside it, and since an asterisk sits high on the line the ink lands
-   near the top of the gap and leaves the remainder below. A fixed height with
-   the content centred in it makes the space above and below match. */
-hr {
-  border: none;
-  height: 1.8em;
-  margin: 2em 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-hr::after {
-  content: "****";
-  font-size: 1.5em;
-  line-height: 1;
-  color: var(--fg);
-}
-
-/* The heading after the divider already has the rule's margin below it. */
-hr + h2 {
-  margin-top: 0;
-}
 
 blockquote {
   margin: 2em 0;

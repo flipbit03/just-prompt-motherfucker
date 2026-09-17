@@ -10,7 +10,7 @@ lines changes the page's metadata. See CLAUDE.md.
 
 *Do you prompt it?*
 
-We are a community of motherfucking programmers who are told, every week, that everything we 
+We are a community of motherfucking programmers who are told, every week, that everything we
 learned the previous week about AI is obsolete.
 
 We are tired of *harness engineering*, *agent orchestration*, *spec-driven development*,
