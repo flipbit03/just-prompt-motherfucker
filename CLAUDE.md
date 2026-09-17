@@ -1,32 +1,153 @@
 # CLAUDE.md
 
-Yes, we know. See the manifesto.
+A manifesto site. One Rust binary serves a page compiled from
+`manifesto/MANIFESTO.md` and records GitHub-authenticated signatures in SQLite.
 
-- The website is one Rust binary. Keep it that way.
-- `manifesto/MANIFESTO.md` is the only copy of the text. Never duplicate it.
-- No JavaScript.
-- No new dependency without a reason you would say out loud.
-- Tests, clippy, fmt. That is the gate.
-- The numbers beside names are positions, derived from `signed_at` at render
-  time. Nothing stores a display number. Removing a signature closes the gap.
-- `jpmf.db` is the only irreplaceable thing here. Nothing automated touches it.
-- Releases are named `YYYY.MM.DD`, and `YYYY.MM.DD.N` for the second and any
-  later release on the same day. No `v`, no release notes. Cutting one deploys
-  to production.
+## Layout
 
-## Known, accepted
+```
+manifesto/MANIFESTO.md   the text; the binary embeds it with include_str!
+app/                     the whole website — one crate, ~2,000 lines
+  src/main.rs            config, routes, handlers
+  src/render.rs          markdown -> HTML, the page, the head metadata
+  src/db.rs              schema and queries
+  src/github.rs          OAuth against GitHub
+  src/cookies.rs         the two CSRF defences
+  assets/style.css       inlined into <head> at build time
+infra/rustible/          provisions the host (Rustible, not Ansible)
+infra/jpmf.service       systemd unit, shipped by the deploy
+.github/workflows/       ci.yml, deploy.yml
+```
 
-Cancelling on GitHub's consent screen redirects to the **production** callback
-rather than localhost. GitHub honours the `redirect_uri` we send when the user
-approves and ignores it when they deny, falling back to the app's first
-registered callback URL — which is the production one. Production is
-unaffected; only local Cancel is odd. A second OAuth App would fix it and is
-not worth a second set of credentials.
+## Stack
+
+axum + tokio, rusqlite (`bundled`, so SQLite compiles in), pulldown-cmark,
+reqwest (rustls), clap, sha2, getrandom. Rust edition 2024, pinned by
+`rust-toolchain.toml`. Ships as a static musl binary, ~8 MB.
+
+## Working on it
+
+```sh
+cd app
+cargo run                                  # http://localhost:8100
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+CI runs exactly those three. Clippy is `-D warnings`; treat a warning as a
+failure locally too.
+
+Changing `manifesto/MANIFESTO.md` requires a rebuild — `include_str!` makes it a
+build dependency, so `cargo run` picks it up automatically.
+
+## How a request works
+
+```
+GET  /                  manifesto + signature list, rendered from SQLite per request
+POST /sign              CSRF check -> set state cookie -> 303 to GitHub
+POST /unsign            same, with the intent encoded in the state
+GET  /auth/callback     verify state -> exchange code -> read account -> act
+POST /unsign/confirm    consume a pending token -> delete the row
+GET  /healthz           the deploy gates on this
+GET  /robots.txt
+```
+
+Anything else answers a rendered 404.
+
+### Signing is not a login
+
+There is no session. The OAuth token is used once to read the account id and
+dropped; nothing about a visitor is remembered between requests. `scope` is
+empty, so GitHub grants only public profile data.
+
+Removing a signature runs the same flow again — re-authenticating *is* how
+someone proves the row is theirs. The `pending_unsign` row carries the proven
+identity from the callback to the confirm button for five minutes, single use,
+pinned to that signature's `signed_at` so a stale confirmation cannot delete a
+signature made after it was issued.
+
+Two separate CSRF defences, covering different holes:
+
+- **`jpmf_state`** covers the callback. Compared whole against the query
+  parameter; a forged query string cannot match a cookie the attacker could
+  never set.
+- **`jpmf_csrf`** plus a hidden form field covers the way *in*. Without it a
+  cross-site POST could start a flow on a visitor's behalf — GitHub skips the
+  consent screen for anyone who already authorised the app.
+
+## Data
+
+```sql
+CREATE TABLE signatures (
+    github_id     INTEGER PRIMARY KEY,   -- the identity; survives renames
+    login         TEXT NOT NULL,         -- display cache, refreshed on re-sign
+    manifesto_sha TEXT NOT NULL,         -- which text they signed
+    hidden_at     TEXT,                  -- moderation; excluded from the roll
+    signed_at     TEXT NOT NULL          -- milliseconds; the sort key
+);
+```
+
+WAL, `synchronous=NORMAL`. One connection behind a `Mutex`; never hold the lock
+across an `.await`. Schema is `CREATE TABLE IF NOT EXISTS` at startup — no
+migration framework.
+
+## Invariants
+
+- **`manifesto/MANIFESTO.md` is the only copy of the text.** The title, subtitle
+  and meta description are parsed out of it at startup, not restated in Rust.
+  They were constants once and drifted.
+- **The numbers beside names are positions**, computed at render time from
+  `signed_at` order. Nothing stores a display number. Removing a signature
+  closes the gap; the founders occupy the first positions so the list starts
+  after them.
+- **Founders are a const, not rows.** `db::FOUNDERS`. Nothing to insert and
+  nothing to delete, so they cannot be revoked and both flows refuse early.
+- **`jpmf.db` is irreplaceable.** Nothing automated touches it. Unlike the other
+  services on that host, this folder is not disposable.
+- **No JavaScript.**
+- **No new dependency without a reason you would say out loud.**
+
+## Deploying
+
+Releases are named `YYYY.MM.DD`, or `YYYY.MM.DD.N` for a second release the same
+day. No `v`, no release notes. Cutting one runs `deploy.yml`: musl build, scp to
+`~jpmf/jpmf_deploy/incoming/`, rename over the running binary, write `.env` from
+repository secrets, `systemctl --user restart`, then poll `/healthz`.
+
+Secrets: `DEPLOY_SSH_KEY`, `JPMF_CLIENT_ID`, `JPMF_CLIENT_SECRET`.
+
+`infra/rustible/` provisions what a deploy cannot renew — the `jpmf` user, the
+deploy key, `enable-linger`, and `/etc/caddy/conf.d/jpmf.caddy`. Run it with
+`rustible playbook run playbooks/jpmf.rs`; it is idempotent. The host's Caddyfile
+imports `conf.d/*.caddy`, and this project owns exactly one file in there.
+
+## Gotchas
+
+Each of these cost time once.
+
+- **scp cannot overwrite a running binary** (`ETXTBSY`). The deploy stages into
+  `incoming/` and renames; a rename over a running executable is fine.
+- **`systemctl --user` over non-interactive SSH** needs `XDG_RUNTIME_DIR`
+  exported or it cannot find the bus.
+- **Cookies must be `SameSite=Lax`, never `Strict`.** The OAuth callback is a
+  cross-site top-level navigation from github.com, and `Strict` withholds
+  cookies on exactly that.
+- **`Options::ENABLE_TABLES`** — without it the values table renders as literal
+  pipe characters.
+- **Cancelling GitHub's consent screen redirects to the production callback**,
+  not localhost. GitHub honours `redirect_uri` on approval and ignores it on
+  denial, falling back to the app's first registered callback. Only local Cancel
+  is affected. Accepted; a second OAuth App would fix it and is not worth a
+  second set of credentials.
+- **Rustible check mode withholds the output of a step that would change**, so
+  reading an account a would-be-created user returns panics. The playbook
+  branches on `is_available()`.
+- **`ssh::authorized_keys` will not create `~/.ssh`** — it needs its own
+  `file::Directory` step first.
 
 ## Writing
 
-Comments explain why something non-obvious is done, once, in a line. They do
-not editorialise, restate the manifesto, or boast about what the code avoids
-using. "Zero JavaScript", "no framework", "this is on purpose" and similar do
-not belong in source, commit messages, or docs — the code already shows it.
-Say what a reader could not work out for themselves, then stop.
+Comments explain why something non-obvious is done, once, in a line. They do not
+editorialise or restate the manifesto. "Zero JavaScript", "no framework", "this
+is on purpose" and similar do not belong in source, commit messages or docs —
+the code already shows it. Say what a reader could not work out for themselves,
+then stop.
