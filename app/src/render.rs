@@ -100,7 +100,7 @@ fn scaled(n: u64, unit: u64, suffix: char) -> String {
     }
 }
 
-fn head(base_url: &str, s: &mut String) {
+fn head(base_url: &str, stars: Option<u64>, s: &mut String) {
     let url = format!("{base_url}/");
     s.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
     s.push_str("<meta charset=\"utf-8\">\n");
@@ -132,26 +132,23 @@ fn head(base_url: &str, s: &mut String) {
 
     let _ = write!(s, "<style>\n{STYLE}</style>\n");
     s.push_str("</head>\n<body>\n");
-}
 
-fn footer(s: &mut String, stars: Option<u64>) {
-    s.push_str("<footer>\n");
     let _ = write!(
         s,
         "<a class=\"gh\" href=\"https://github.com/{REPO}\">{GITHUB_MARK}<span>"
     );
-    // No number when the count could not be fetched, rather than a zero that
-    // cannot be told apart from a repository nobody has starred.
+    // No number until a fetch succeeds: a missing answer and a repository
+    // nobody has starred should not look the same.
     match stars {
         Some(n) => {
             let _ = writeln!(s, "{}</span></a>", compact(n));
         }
         None => s.push_str("GitHub</span></a>\n"),
     }
-    s.push_str(
-        "<p>The manifesto is CC&nbsp;BY&nbsp;4.0. The code is MIT.</p>\n\
-         </footer>\n</body>\n</html>\n",
-    );
+}
+
+fn close(s: &mut String) {
+    s.push_str("</body>\n</html>\n");
 }
 
 /// Display number for the nth entry of the roll, counting from zero. The
@@ -164,7 +161,7 @@ pub fn rank(index: usize) -> usize {
 pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) -> String {
     let count = (db::FOUNDERS.len() + roll.len()) as i64;
     let mut s = String::with_capacity(32 * 1024);
-    head(base_url, &mut s);
+    head(base_url, stars, &mut s);
 
     s.push_str("<main>\n");
     s.push_str(manifesto_html());
@@ -215,7 +212,7 @@ pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) 
     );
     s.push_str("</section>\n</main>\n");
 
-    footer(&mut s, stars);
+    close(&mut s);
     s
 }
 
@@ -229,7 +226,7 @@ pub fn confirm_unsign(
     token: &str,
 ) -> String {
     let mut s = String::with_capacity(8 * 1024);
-    head(base_url, &mut s);
+    head(base_url, stars, &mut s);
     s.push_str("<main>\n<h1>Remove your signature?</h1>\n");
     let _ = writeln!(
         s,
@@ -249,21 +246,21 @@ pub fn confirm_unsign(
         esc(token)
     );
     s.push_str("<p><a href=\"/\">No, keep it</a></p>\n</main>\n");
-    footer(&mut s, stars);
+    close(&mut s);
     s
 }
 
 /// A small standalone page for the paths that are not the manifesto.
 pub fn notice(base_url: &str, stars: Option<u64>, heading: &str, body: &str) -> String {
     let mut s = String::with_capacity(8 * 1024);
-    head(base_url, &mut s);
+    head(base_url, stars, &mut s);
     let _ = write!(
         s,
         "<main>\n<h1>{}</h1>\n<p>{}</p>\n<p><a href=\"/\">Back to the manifesto</a></p>\n</main>\n",
         esc(heading),
         esc(body)
     );
-    footer(&mut s, stars);
+    close(&mut s);
     s
 }
 

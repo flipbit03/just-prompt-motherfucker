@@ -133,17 +133,10 @@ button {
 
 button:hover { background: var(--bg); color: var(--fg); }
 
-footer {
-  margin-top: 3em;
-  color: var(--muted);
-  font-size: 0.85em;
-}
-
-footer a { color: var(--muted); }
-
 /* Phones: the title needs to stop shouting, and the table needs an escape. */
 @media (max-width: 30em) {
-  body { margin: 1.5em auto; font-size: 1.05em; }
+  /* Enough head room that the corner button never lands on the title. */
+  body { margin: 3.4em auto 1.5em; font-size: 1.05em; }
   h1 { font-size: 2.1em; }
   h1 + p { font-size: 1.2em; }
   .signers { columns: 1; }
@@ -165,8 +158,13 @@ footer a { color: var(--muted); }
 
 .unsign button:hover { background: none; color: var(--fg); }
 
-/* The GitHub link in the footer: mark plus star count, filled in server-side. */
+/* Top right of the page, above everything. Absolute rather than fixed, and
+   with no positioned ancestor, so it sits in the page corner and scrolls away
+   instead of following the reader down the manifesto. */
 .gh {
+  position: absolute;
+  top: 1.1rem;
+  right: 1.25rem;
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
