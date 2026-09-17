@@ -130,11 +130,6 @@ blockquote {
   font-size: 0.85em;
 }
 
-.nobody {
-  color: var(--muted);
-  font-style: italic;
-}
-
 button {
   display: inline-flex;
   align-items: center;

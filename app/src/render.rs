@@ -267,9 +267,7 @@ pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) 
 
     s.push_str("<section class=\"signatures\">\n");
 
-    if roll.is_empty() {
-        s.push_str("<p class=\"nobody\">Nobody yet. Be the first.</p>\n");
-    } else {
+    if !roll.is_empty() {
         s.push_str("<ol class=\"signers\">\n");
         for (i, sig) in roll.iter().enumerate() {
             let n = rank(i);
@@ -432,11 +430,15 @@ mod tests {
         assert_eq!(sha, manifesto_sha());
     }
 
+    /// With nobody signed there is no list and no placeholder — the closing
+    /// line stands on its own and the button is the only invitation.
     #[test]
-    fn an_empty_roll_still_counts_the_founders() {
+    fn an_empty_roll_renders_no_list_at_all() {
         let html = page("http://localhost:8100", "csrf0", None, &[]);
         assert!(html.contains("2 signatures and counting"));
-        assert!(html.contains("Nobody yet"));
+        assert!(!html.contains("<ol class=\"signers\">"));
+        assert!(!html.contains("Nobody yet"));
+        assert!(html.contains("action=\"/sign\""));
     }
 
     #[test]
