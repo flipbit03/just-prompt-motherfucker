@@ -104,17 +104,46 @@ pub fn manifesto_sha() -> &'static str {
     })
 }
 
-/// The manifesto rendered once, on first use, and reused for every request.
-fn manifesto_html() -> &'static str {
-    static HTML: OnceLock<String> = OnceLock::new();
-    HTML.get_or_init(|| {
-        // Without ENABLE_TABLES the values table renders as literal pipes.
-        let mut opts = Options::empty();
-        opts.insert(Options::ENABLE_TABLES);
-        let mut out = String::new();
-        html::push_html(&mut out, Parser::new_ext(MANIFESTO_MD, opts));
-        out
-    })
+fn to_html(md: &str) -> String {
+    // Without ENABLE_TABLES the values table renders as literal pipes.
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    let mut out = String::new();
+    html::push_html(&mut out, Parser::new_ext(md, opts));
+    out
+}
+
+/// The manifesto's last line with a colon on it, so that it introduces the
+/// names rather than merely preceding them.
+fn introducing(md: &str) -> String {
+    let lines: Vec<&str> = md.lines().collect();
+    let Some(last) = lines.iter().rposition(|l| !l.trim().is_empty()) else {
+        return md.to_string();
+    };
+    let mut out = String::with_capacity(md.len() + 1);
+    for (i, line) in lines.iter().enumerate() {
+        if i == last {
+            out.push_str(line.trim_end());
+            out.push(':');
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Rendered twice and cached: as written, and with the closing line turned
+/// into an introduction. Which one the page uses depends on whether anybody
+/// has signed.
+fn manifesto_html(introduces: bool) -> &'static str {
+    static PLAIN: OnceLock<String> = OnceLock::new();
+    static INTRO: OnceLock<String> = OnceLock::new();
+    if introduces {
+        INTRO.get_or_init(|| to_html(&introducing(MANIFESTO_MD)))
+    } else {
+        PLAIN.get_or_init(|| to_html(MANIFESTO_MD))
+    }
 }
 
 fn esc(raw: &str) -> String {
@@ -234,9 +263,26 @@ pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) 
     head(base_url, stars, &mut s);
 
     s.push_str("<main>\n");
-    s.push_str(manifesto_html());
+    s.push_str(manifesto_html(!roll.is_empty()));
 
-    s.push_str("<section class=\"signatures\">\n<h2>Also signed:</h2>\n");
+    s.push_str("<section class=\"signatures\">\n");
+
+    if roll.is_empty() {
+        s.push_str("<p class=\"nobody\">Nobody yet. Be the first.</p>\n");
+    } else {
+        s.push_str("<ol class=\"signers\">\n");
+        for (i, sig) in roll.iter().enumerate() {
+            let n = rank(i);
+            let login = esc(&sig.login);
+            let _ = writeln!(
+                s,
+                "<li id=\"s{n}\"><a href=\"https://github.com/{login}\" rel=\"nofollow ugc\">\
+                 <span class=\"n\">#{n}</span>{login}</a></li>",
+            );
+        }
+        s.push_str("</ol>\n");
+    }
+
     let word = if count == 1 {
         "signature"
     } else {
@@ -248,36 +294,20 @@ pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) 
         thousands(count)
     );
 
-    if roll.is_empty() {
-        s.push_str("<p class=\"nobody\">Nobody yet. Be the first.</p>\n");
-    } else {
-        s.push_str("<ol class=\"signers\">\n");
-        for (i, sig) in roll.iter().enumerate() {
-            let n = rank(i);
-            let login = esc(&sig.login);
-            let _ = writeln!(
-                s,
-                "<li id=\"s{n}\"><span class=\"n\">#{n}</span><a href=\"https://github.com/{login}\" \
-                 rel=\"nofollow ugc\">{login}</a></li>",
-            );
-        }
-        s.push_str("</ol>\n");
-    }
-
     // POST, not a link: a GET would be followed by crawlers and prefetchers.
     // The hidden field is the twin of the jpmf_csrf cookie.
     let _ = write!(
         s,
-        "<form method=\"post\" action=\"/sign\">\n\
+        "<form method=\"post\" action=\"/sign\" class=\"sign\">\n\
          <input type=\"hidden\" name=\"csrf\" value=\"{}\">\n\
-         <button>Sign it</button>\n</form>\n",
+         <button>{GITHUB_MARK}<span>Sign it</span></button>\n</form>\n",
         esc(csrf)
     );
     let _ = write!(
         s,
         "<form method=\"post\" action=\"/unsign\" class=\"unsign\">\n\
          <input type=\"hidden\" name=\"csrf\" value=\"{}\">\n\
-         <button type=\"submit\">Signed by mistake? Remove my signature</button>\n</form>\n",
+         <button type=\"submit\">Remove my signature</button>\n</form>\n",
         esc(csrf)
     );
     s.push_str("</section>\n</main>\n");
@@ -351,7 +381,7 @@ mod tests {
 
     #[test]
     fn manifesto_renders_its_table() {
-        let html = manifesto_html();
+        let html = manifesto_html(false);
         assert!(html.contains("<table>"), "values table did not render");
         assert!(!html.contains("| Autonomous agents |"));
     }
@@ -449,6 +479,39 @@ mod tests {
         assert!(third < fourth);
         assert!(list[third..fourth].contains("oldest"));
         assert!(list[fourth..].contains("newest"));
+    }
+
+    /// The manifesto's last line introduces the names when there are names, so
+    /// its shape matters as much as the title's does.
+    #[test]
+    fn the_closing_line_gains_a_colon_only_when_someone_has_signed() {
+        let plain = page("http://localhost:8100", "csrf0", None, &[]);
+        let signed = page("http://localhost:8100", "csrf0", None, &roll(&["a"]));
+
+        let last = MANIFESTO_MD
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap()
+            .trim_end();
+        assert!(plain.contains(last));
+        assert!(!plain.contains(&format!("{last}:")));
+        assert!(signed.contains(&format!("{last}:")));
+    }
+
+    #[test]
+    fn introducing_only_touches_the_last_line() {
+        let md = "# T\n\nbody\n\nlast line\n";
+        assert_eq!(introducing(md), "# T\n\nbody\n\nlast line:\n");
+    }
+
+    #[test]
+    fn the_sign_button_carries_the_github_mark() {
+        let html = page("http://localhost:8100", "csrf0", None, &[]);
+        let form = html.split("action=\"/sign\"").nth(1).expect("no sign form");
+        let button = form.split("</form>").next().unwrap();
+        assert!(button.contains("<svg"), "no mark on the sign button");
+        assert!(button.contains("Sign it"));
     }
 
     #[test]

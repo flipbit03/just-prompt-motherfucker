@@ -22,8 +22,6 @@ forty skills just to ask for what we want, by people who can't ship anything bec
 
 We must delete the scaffolding and let people... **Just Prompt, Motherfucker**.
 
----
-
 ## Our values
 
 | They Claim You Need | They Really Mean | We |
@@ -35,6 +33,17 @@ We must delete the scaffolding and let people... **Just Prompt, Motherfucker**.
 | Twenty MCP servers | Nineteen you never call | **Just Prompt, Motherfucker** |
 
 We believe that anyone who can explain a problem to a colleague can prompt, and that no amount of "harnessing" will save anyone who cannot. Think before you build, have a solid exchange with your agent and you're good. That's it...**Just Prompt, Motherfucker**.
+
+<!--
+The LAST non-empty line of this file is load-bearing. Once anyone has signed,
+the site appends a colon to it and lists every signature directly underneath,
+so that line has to read as an introduction to a list of people.
+
+Two consequences. Keep it a line that can introduce names — if it becomes a
+full stop, a question, or anything that cannot be followed by a list, the page
+stops making sense. And keep it last: anything added below it becomes the line
+that gets the colon instead. See CLAUDE.md.
+-->
 
 \
 Signed,\
