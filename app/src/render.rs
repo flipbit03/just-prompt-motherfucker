@@ -14,11 +14,69 @@ use crate::db::{self, Signatory};
 const MANIFESTO_MD: &str = include_str!("../../manifesto/MANIFESTO.md");
 const STYLE: &str = include_str!("../assets/style.css");
 
-const TITLE: &str = "Just Prompt, Motherfucker";
-const SUBTITLE: &str = "Do you speak it?";
-const DESCRIPTION: &str = "We are tired of harness engineering, agent orchestration, \
-                           spec-driven development and everything else getting in the \
-                           way of shipping software.";
+/// Title, subtitle and description are read out of the manifesto rather than
+/// restated here. Restating them is what let the card keep advertising an old
+/// subtitle after the document had changed.
+struct FrontMatter {
+    title: String,
+    subtitle: String,
+    description: String,
+}
+
+/// Markdown paragraphs: blank-line separated, soft wraps joined.
+fn paragraphs(md: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut para = String::new();
+    for line in md.lines() {
+        if line.trim().is_empty() {
+            if !para.is_empty() {
+                out.push(std::mem::take(&mut para));
+            }
+        } else {
+            if !para.is_empty() {
+                para.push(' ');
+            }
+            para.push_str(line.trim());
+        }
+    }
+    if !para.is_empty() {
+        out.push(para);
+    }
+    out
+}
+
+fn front_matter() -> &'static FrontMatter {
+    static FM: OnceLock<FrontMatter> = OnceLock::new();
+    FM.get_or_init(|| {
+        let paras = paragraphs(MANIFESTO_MD);
+
+        let title = paras
+            .iter()
+            .find_map(|p| p.strip_prefix("# "))
+            .unwrap_or("Just Prompt, Motherfucker")
+            .to_string();
+
+        // The one emphasised line under the title.
+        let subtitle = paras
+            .iter()
+            .find(|p| p.starts_with('*') && p.ends_with('*') && !p.starts_with("**"))
+            .map(|p| p.trim_matches('*').trim().to_string())
+            .unwrap_or_default();
+
+        // The first paragraph of actual prose becomes the search snippet.
+        let description = paras
+            .iter()
+            .find(|p| !p.starts_with('#') && !p.starts_with('*') && !p.starts_with('|'))
+            .map(|p| p.replace(['*', '_'], ""))
+            .unwrap_or_default();
+
+        FrontMatter {
+            title,
+            subtitle,
+            description,
+        }
+    })
+}
 pub const REPO: &str = "flipbit03/just-prompt-motherfucker";
 
 /// The GitHub mark, from primer/octicons (MIT). Inlined so the footer costs no
@@ -105,11 +163,12 @@ fn head(base_url: &str, stars: Option<u64>, s: &mut String) {
     s.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
     s.push_str("<meta charset=\"utf-8\">\n");
     s.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    let _ = writeln!(s, "<title>{}</title>", esc(TITLE));
+    let fm = front_matter();
+    let _ = writeln!(s, "<title>{}</title>", esc(&fm.title));
     let _ = writeln!(
         s,
         "<meta name=\"description\" content=\"{}\">",
-        esc(DESCRIPTION)
+        esc(&fm.description)
     );
     let _ = writeln!(s, "<link rel=\"canonical\" href=\"{}\">", esc(&url));
 
@@ -117,16 +176,20 @@ fn head(base_url: &str, stars: Option<u64>, s: &mut String) {
     // pointed at a 404 — Facebook caches a bad first scrape indefinitely.
     s.push_str("<meta property=\"og:type\" content=\"website\">\n");
     let _ = writeln!(s, "<meta property=\"og:url\" content=\"{}\">", esc(&url));
-    let _ = writeln!(s, "<meta property=\"og:title\" content=\"{}\">", esc(TITLE));
+    let _ = writeln!(
+        s,
+        "<meta property=\"og:title\" content=\"{}\">",
+        esc(&fm.title)
+    );
     let _ = writeln!(
         s,
         "<meta property=\"og:description\" content=\"{}\">",
-        esc(SUBTITLE)
+        esc(&fm.subtitle)
     );
     let _ = writeln!(
         s,
         "<meta property=\"og:site_name\" content=\"{}\">",
-        esc(TITLE)
+        esc(&fm.title)
     );
     s.push_str("<meta name=\"twitter:card\" content=\"summary_large_image\">\n");
 
@@ -284,6 +347,33 @@ mod tests {
         let html = manifesto_html();
         assert!(html.contains("<table>"), "values table did not render");
         assert!(!html.contains("| Autonomous agents |"));
+    }
+
+    /// The card advertised "Do you speak it?" for a while after the manifesto
+    /// said "Do you prompt it?", because the strings lived in two places.
+    #[test]
+    fn head_metadata_comes_from_the_manifesto() {
+        let fm = front_matter();
+        assert!(MANIFESTO_MD.contains(&format!("# {}", fm.title)));
+        assert!(MANIFESTO_MD.contains(&format!("*{}*", fm.subtitle)));
+        assert!(!fm.description.is_empty());
+        assert!(!fm.description.contains('*'), "emphasis must be stripped");
+
+        let html = page("http://localhost:8100", "csrf0", None, &[]);
+        assert!(html.contains(&format!("<title>{}</title>", fm.title)));
+        assert!(html.contains(&format!(
+            "<meta property=\"og:description\" content=\"{}\">",
+            fm.subtitle
+        )));
+    }
+
+    #[test]
+    fn paragraphs_join_soft_wraps() {
+        let md = "# T\n\n*sub*\n\nfirst line\nsecond line\n\nnext";
+        assert_eq!(
+            paragraphs(md),
+            ["# T", "*sub*", "first line second line", "next"]
+        );
     }
 
     #[test]
