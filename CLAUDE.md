@@ -7,8 +7,18 @@ Yes, we know. See the manifesto.
 - No JavaScript.
 - No new dependency without a reason you would say out loud.
 - Tests, clippy, fmt. That is the gate.
-- Signature ordinals are permanent. Never renumber them.
+- The numbers beside names are positions, derived from `signed_at` at render
+  time. Nothing stores a display number. Removing a signature closes the gap.
 - `jpmf.db` is the only irreplaceable thing here. Nothing automated touches it.
+
+## Known, accepted
+
+Cancelling on GitHub's consent screen redirects to the **production** callback
+rather than localhost. GitHub honours the `redirect_uri` we send when the user
+approves and ignores it when they deny, falling back to the app's first
+registered callback URL — which is the production one. Production is
+unaffected; only local Cancel is odd. A second OAuth App would fix it and is
+not worth a second set of credentials.
 
 ## Writing
 
