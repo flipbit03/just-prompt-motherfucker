@@ -76,15 +76,8 @@ Two separate CSRF defences, covering different holes:
 
 ## Data
 
-```sql
-CREATE TABLE signatures (
-    github_id     INTEGER PRIMARY KEY,   -- the identity; survives renames
-    login         TEXT NOT NULL,         -- display cache, refreshed on re-sign
-    manifesto_sha TEXT NOT NULL,         -- which text they signed
-    hidden_at     TEXT,                  -- moderation; excluded from the roll
-    signed_at     TEXT NOT NULL          -- milliseconds; the sort key
-);
-```
+One table, `signatures`, defined in `app/src/db.rs`. Keyed by `github_id`,
+because handles get renamed and ids do not.
 
 WAL, `synchronous=NORMAL`. One connection behind a `Mutex`; never hold the lock
 across an `.await`. Schema is `CREATE TABLE IF NOT EXISTS` at startup — no
@@ -92,9 +85,15 @@ migration framework.
 
 ## Invariants
 
-- **`manifesto/MANIFESTO.md` is the only copy of the text.** The title, subtitle
-  and meta description are parsed out of it at startup, not restated in Rust.
-  They were constants once and drifted.
+- **`manifesto/MANIFESTO.md` is the only copy of the text, and its opening
+  lines are load-bearing.** `render::front_matter` parses the file at startup:
+  the `# ` line becomes `<title>` and `og:title`, the emphasised line under it
+  becomes `og:description`, and the first paragraph of prose becomes the meta
+  description search engines show. Change the *shape* of those lines — drop the
+  emphasis, add a paragraph above the title, lead with a quote — and the page's
+  metadata changes with it or empties out. The manifesto carries a comment
+  saying so. These were Rust constants once; they drifted, and the share card
+  advertised a subtitle the document no longer had.
 - **The numbers beside names are positions**, computed at render time from
   `signed_at` order. Nothing stores a display number. Removing a signature
   closes the gap; the founders occupy the first positions so the list starts
@@ -115,9 +114,10 @@ repository secrets, `systemctl --user restart`, then poll `/healthz`.
 
 Secrets: `DEPLOY_SSH_KEY`, `JPMF_CLIENT_ID`, `JPMF_CLIENT_SECRET`.
 
-`infra/rustible/` provisions what a deploy cannot renew — the `jpmf` user, the
+[`infra/rustible/`](infra/rustible/) provisions what a deploy cannot renew — the `jpmf` user, the
 deploy key, `enable-linger`, and `/etc/caddy/conf.d/jpmf.caddy`. Run it with
-`rustible playbook run playbooks/jpmf.rs`; it is idempotent. The host's Caddyfile
+`rustible playbook run playbooks/jpmf.rs`; it is idempotent. Rustible is an
+Ansible replacement whose playbooks are Rust: https://github.com/flipbit03/rustible The host's Caddyfile
 imports `conf.d/*.caddy`, and this project owns exactly one file in there.
 
 ## Gotchas
@@ -131,23 +131,16 @@ Each of these cost time once.
 - **Cookies must be `SameSite=Lax`, never `Strict`.** The OAuth callback is a
   cross-site top-level navigation from github.com, and `Strict` withholds
   cookies on exactly that.
-- **`Options::ENABLE_TABLES`** — without it the values table renders as literal
-  pipe characters.
 - **Cancelling GitHub's consent screen redirects to the production callback**,
   not localhost. GitHub honours `redirect_uri` on approval and ignores it on
   denial, falling back to the app's first registered callback. Only local Cancel
   is affected. Accepted; a second OAuth App would fix it and is not worth a
   second set of credentials.
-- **Rustible check mode withholds the output of a step that would change**, so
-  reading an account a would-be-created user returns panics. The playbook
-  branches on `is_available()`.
-- **`ssh::authorized_keys` will not create `~/.ssh`** — it needs its own
-  `file::Directory` step first.
 
 ## Writing
 
 Comments explain why something non-obvious is done, once, in a line. They do not
-editorialise or restate the manifesto. "Zero JavaScript", "no framework", "this
-is on purpose" and similar do not belong in source, commit messages or docs —
-the code already shows it. Say what a reader could not work out for themselves,
+editorialise, restate the manifesto, or boast about what the code avoids using.
+"Zero JavaScript", "no framework", "this is on purpose" and similar do not
+belong in source, commit messages or docs — the code already shows it. Say what a reader could not work out for themselves,
 then stop.
