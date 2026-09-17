@@ -10,6 +10,8 @@ Yes, we know. See the manifesto.
 - The numbers beside names are positions, derived from `signed_at` at render
   time. Nothing stores a display number. Removing a signature closes the gap.
 - `jpmf.db` is the only irreplaceable thing here. Nothing automated touches it.
+- Releases are named `YYYY.MM.DD`. No `v`, no suffix, no release notes. Cutting
+  one deploys to production.
 
 ## Known, accepted
 

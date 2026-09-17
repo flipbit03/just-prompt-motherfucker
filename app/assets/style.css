@@ -30,6 +30,7 @@ body {
   background: var(--bg);
   line-height: 1.5;
   font-size: 1.1em;
+  text-align: center;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -48,9 +49,18 @@ h1 + p {
   margin: 0.3em 0 2em;
 }
 
-h2 { font-size: 1.6em; margin-top: 2em; }
+h2 {
+  font-size: 1.6em;
+  margin-top: 2em;
+  /* Headings want tighter leading than body text; inheriting 1.5 left a band
+     of space above the glyphs that read as uneven spacing after the rule. */
+  line-height: 1.2;
+}
 
-ul { padding-left: 1.2em; }
+ul {
+  padding-left: 0;
+  list-style-position: inside;
+}
 li { margin: 0.6em 0; }
 
 a { color: var(--fg); }
@@ -63,17 +73,51 @@ table {
 
 th, td {
   border: 1px solid var(--rule);
-  padding: 0.5em 0.7em;
-  text-align: left;
-  vertical-align: top;
+  padding: 0.7em 0.9em;
+  text-align: center;
+  vertical-align: middle;
+}
+
+/* "They Claim You Need" has to hold one line, and so does the refrain — it is
+   the payoff of every row. The other columns give up the width. */
+th,
+td:last-child {
+  white-space: nowrap;
 }
 
 th { background: var(--th-bg); }
 
+/* The divider between the prose and the values table. The markdown says `---`,
+   which is what it actually is; the asterisks are presentation.
+
+   The rule needs a real box: with `border: none` it has zero height, the glyphs
+   render outside it, and since an asterisk sits high on the line the ink lands
+   near the top of the gap and leaves the remainder below. A fixed height with
+   the content centred in it makes the space above and below match. */
+hr {
+  border: none;
+  height: 1.8em;
+  margin: 2em 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+hr::after {
+  content: "****";
+  font-size: 1.5em;
+  line-height: 1;
+  color: var(--fg);
+}
+
+/* The heading after the divider already has the rule's margin below it. */
+hr + h2 {
+  margin-top: 0;
+}
+
 blockquote {
-  margin: 1.5em 0;
-  padding-left: 1em;
-  border-left: 4px solid var(--rule);
+  margin: 2em 0;
+  padding: 0;
   font-style: italic;
 }
 

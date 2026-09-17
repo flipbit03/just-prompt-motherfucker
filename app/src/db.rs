@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension as _, Result};
 /// Named in the manifesto itself. They are not rows — there is nothing to
 /// insert and nothing to delete, so a founder cannot be revoked. They hold the
 /// first display positions, and the list below the manifesto starts after them.
-pub const FOUNDERS: &[(i64, &str)] = &[(385_640, "leandronsp"), (5_620_032, "flipbit03")];
+pub const FOUNDERS: &[(i64, &str)] = &[(5_620_032, "flipbit03"), (385_640, "leandronsp")];
 
 pub fn is_founder(github_id: i64) -> bool {
     FOUNDERS.iter().any(|(id, _)| *id == github_id)

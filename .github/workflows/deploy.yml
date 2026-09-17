@@ -49,8 +49,10 @@ jobs:
           username: jpmf
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           source: app/target/x86_64-unknown-linux-musl/release/jpmf
-          target: /home/jpmf/jpmf_deploy/
-          strip_components: 5
+          # Staged next to the live binary: scp cannot write over a running
+          # executable, but the rename below can.
+          target: /home/jpmf/jpmf_deploy/incoming/
+          strip_components: 4
 
       - name: Push the systemd unit
         uses: appleboy/scp-action@v1
@@ -82,9 +84,11 @@ jobs:
               "https://www.just-prompt-motherfucker.com" \
               "$CLIENT_ID" "$CLIENT_SECRET" > ~/jpmf_deploy/.env
 
-            # scp cannot write over a running executable (ETXTBSY), but rename
-            # can: the old inode stays alive until the process exits.
-            chmod 0755 ~/jpmf_deploy/jpmf
+            # Rename over the running binary: the old inode stays alive until
+            # the process exits, so this is safe while the site is serving.
+            chmod 0755 ~/jpmf_deploy/incoming/jpmf
+            mv ~/jpmf_deploy/incoming/jpmf ~/jpmf_deploy/jpmf
+            rmdir ~/jpmf_deploy/incoming
             systemctl --user daemon-reload
             systemctl --user enable jpmf
             systemctl --user restart jpmf
