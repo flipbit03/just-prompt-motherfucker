@@ -176,6 +176,7 @@ async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
         .route("/auth/callback", get(callback))
         .route("/healthz", get(healthz))
         .route("/robots.txt", get(robots))
+        .route("/og.png", get(og_image))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(app);
@@ -580,6 +581,18 @@ async fn robots() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         "User-agent: *\nAllow: /\n",
+    )
+}
+
+/// Scrapers keep the first image they fetch, so a redesign ships at a new
+/// path rather than replacing this one.
+async fn og_image() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=604800"),
+        ],
+        render::OG_IMAGE,
     )
 }
 

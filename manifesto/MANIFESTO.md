@@ -1,9 +1,12 @@
 <!--
 The title below and the emphasised line under it are load-bearing. The site
-parses this file at startup: the `# ` line becomes <title> and og:title, the
-emphasised line becomes og:description, and the first paragraph of prose
-becomes the meta description search engines show. Changing the shape of those
-lines changes the page's metadata. See CLAUDE.md.
+parses this file at startup: the `# ` line becomes <title>, the `# ` line and
+the emphasised line together become the share card's title and alt text, and
+the first paragraph of prose becomes the description search engines and share
+cards show.
+Changing the shape of those lines changes the page's metadata. The share
+card itself, app/assets/og.png, repeats the title and the emphasised line and
+has to be redrawn by hand when either changes. See CLAUDE.md.
 -->
 
 # Just Prompt, Motherfucker

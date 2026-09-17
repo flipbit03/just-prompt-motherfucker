@@ -112,11 +112,12 @@ migration framework.
 
 - **`manifesto/MANIFESTO.md` is the only copy of the text, and its opening
   lines are load-bearing.** `render::front_matter` parses the file at startup:
-  the `# ` line becomes `<title>` and `og:title`, the emphasised line under it
-  becomes `og:description`, and the first paragraph of prose becomes the meta
-  description search engines show. Change the *shape* of those lines — drop the
-  emphasis, add a paragraph above the title, lead with a quote — and the page's
-  metadata changes with it or empties out. The manifesto carries a comment
+  the `# ` line becomes `<title>`, the `# ` line and the emphasised line under
+  it together become the share card's title and alt text, and the first
+  paragraph of prose becomes the description search engines and share cards
+  show. Change the *shape* of those lines — drop the emphasis, add a paragraph
+  above the title, lead with a quote — and the page's metadata changes with it
+  or empties out. The manifesto carries a comment
   saying so. These were Rust constants once; they drifted, and the share card
   advertised a subtitle the document no longer had.
 - **The numbers beside names are positions**, computed at render time from
