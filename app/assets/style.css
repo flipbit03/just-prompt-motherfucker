@@ -158,13 +158,14 @@ button:hover { background: var(--bg); color: var(--fg); }
 
 .unsign button:hover { background: none; color: var(--fg); }
 
-/* Top right of the page, above everything. Absolute rather than fixed, and
-   with no positioned ancestor, so it sits in the page corner and scrolls away
-   instead of following the reader down the manifesto. */
+/* Follows the reader down the page. Opaque, because the manifesto scrolls
+   underneath it. */
 .gh {
-  position: absolute;
+  position: fixed;
   top: 1.1rem;
   right: 1.25rem;
+  z-index: 10;
+  background: var(--bg);
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
