@@ -19,6 +19,9 @@ pub fn is_founder(github_id: i64) -> bool {
 pub struct Signatory {
     pub github_id: i64,
     pub login: String,
+    /// Doubles as the sort key and as the identity of this particular
+    /// signature, so a removal cannot carry over to a later one.
+    pub signed_at: String,
 }
 
 /// `github_id` is the primary key: it is the identity that matters, it never
@@ -38,6 +41,7 @@ CREATE TABLE IF NOT EXISTS signatures (
 CREATE TABLE IF NOT EXISTS pending_unsign (
     token      TEXT    PRIMARY KEY,
     github_id  INTEGER NOT NULL,
+    signed_at  TEXT    NOT NULL,
     expires_at TEXT    NOT NULL
 );
 ";
@@ -61,7 +65,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 /// order deterministically rather than swapping places between requests.
 pub fn roll(conn: &Connection) -> Result<Vec<Signatory>> {
     let mut stmt = conn.prepare(
-        "SELECT github_id, login
+        "SELECT github_id, login, signed_at
            FROM signatures
           WHERE hidden_at IS NULL
           ORDER BY signed_at, github_id",
@@ -70,6 +74,7 @@ pub fn roll(conn: &Connection) -> Result<Vec<Signatory>> {
         Ok(Signatory {
             github_id: row.get(0)?,
             login: row.get(1)?,
+            signed_at: row.get(2)?,
         })
     })?;
     rows.collect()
@@ -93,27 +98,39 @@ pub fn sign(conn: &Connection, github_id: i64, login: &str, manifesto_sha: &str)
 /// A real delete: they asked for their data gone. `hidden_at` is for
 /// moderation, where the record should survive.
 ///
+/// `signed_at` pins it to the signature the person actually saw and agreed to
+/// remove. Without it, a confirmation left open in a tab would delete whatever
+/// signature that account happened to have when it was finally submitted —
+/// including one made after the confirmation was issued.
+///
 /// Returns the handle that went, so the removal reaches the log — nothing else
 /// records that a signature ever existed.
-pub fn unsign(conn: &Connection, github_id: i64) -> Result<Option<String>> {
+pub fn unsign(conn: &Connection, github_id: i64, signed_at: &str) -> Result<Option<String>> {
     conn.query_row(
-        "DELETE FROM signatures WHERE github_id = ?1 RETURNING login",
-        [github_id],
+        "DELETE FROM signatures
+               WHERE github_id = ?1 AND signed_at = ?2
+           RETURNING login",
+        rusqlite::params![github_id, signed_at],
         |row| row.get(0),
     )
     .optional()
 }
 
-pub fn pending_unsign_create(conn: &Connection, token: &str, github_id: i64) -> Result<()> {
+pub fn pending_unsign_create(
+    conn: &Connection,
+    token: &str,
+    github_id: i64,
+    signed_at: &str,
+) -> Result<()> {
     // Nothing else cleans this table, so every insert sweeps it.
     conn.execute(
         "DELETE FROM pending_unsign WHERE expires_at < datetime('now')",
         [],
     )?;
     conn.execute(
-        "INSERT INTO pending_unsign (token, github_id, expires_at)
-         VALUES (?1, ?2, datetime('now', '+5 minutes'))",
-        rusqlite::params![token, github_id],
+        "INSERT INTO pending_unsign (token, github_id, signed_at, expires_at)
+         VALUES (?1, ?2, ?3, datetime('now', '+5 minutes'))",
+        rusqlite::params![token, github_id, signed_at],
     )?;
     Ok(())
 }
@@ -121,13 +138,13 @@ pub fn pending_unsign_create(conn: &Connection, token: &str, github_id: i64) -> 
 /// Consume a pending confirmation. Single use: a valid row is deleted by the
 /// same statement that reads it, so a token cannot be replayed. An expired one
 /// matches nothing here and is left for the sweep in `pending_unsign_create`.
-pub fn pending_unsign_take(conn: &Connection, token: &str) -> Result<Option<i64>> {
+pub fn pending_unsign_take(conn: &Connection, token: &str) -> Result<Option<(i64, String)>> {
     conn.query_row(
         "DELETE FROM pending_unsign
                WHERE token = ?1 AND expires_at >= datetime('now')
-           RETURNING github_id",
+           RETURNING github_id, signed_at",
         [token],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
 }
@@ -204,8 +221,17 @@ mod tests {
         sign_at(&conn, 20, "b", "2026-02-01 00:00:00.000");
         sign_at(&conn, 30, "c", "2026-03-01 00:00:00.000");
 
-        assert_eq!(unsign(&conn, 20).unwrap().as_deref(), Some("b"));
-        assert_eq!(unsign(&conn, 20).unwrap(), None, "already gone");
+        let at = |id: i64| {
+            roll(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|s| s.github_id == id)
+                .unwrap()
+                .signed_at
+        };
+        let b_at = at(20);
+        assert_eq!(unsign(&conn, 20, &b_at).unwrap().as_deref(), Some("b"));
+        assert_eq!(unsign(&conn, 20, &b_at).unwrap(), None, "already gone");
         assert_eq!(logins(&conn), ["a", "c"], "the list closes up");
 
         sign_at(&conn, 20, "b", "2026-04-01 00:00:00.000");
@@ -245,19 +271,40 @@ mod tests {
     #[test]
     fn pending_unsign_is_single_use() {
         let conn = fresh();
-        sign(&conn, 99, "a", "sha").unwrap();
-        pending_unsign_create(&conn, "tok", 99).unwrap();
-        assert_eq!(pending_unsign_take(&conn, "tok").unwrap(), Some(99));
+        sign_at(&conn, 99, "a", "2026-01-01 00:00:00.000");
+        pending_unsign_create(&conn, "tok", 99, "2026-01-01 00:00:00.000").unwrap();
+        assert_eq!(
+            pending_unsign_take(&conn, "tok").unwrap(),
+            Some((99, "2026-01-01 00:00:00.000".to_string()))
+        );
         assert_eq!(pending_unsign_take(&conn, "tok").unwrap(), None);
         assert_eq!(pending_unsign_take(&conn, "never-existed").unwrap(), None);
+    }
+
+    /// A confirmation left open in a tab must not remove a signature made
+    /// after it was issued — the page promised to remove one particular one.
+    #[test]
+    fn a_confirmation_does_not_carry_over_to_a_later_signature() {
+        let conn = fresh();
+        sign_at(&conn, 99, "a", "2026-01-01 00:00:00.000");
+        pending_unsign_create(&conn, "tok", 99, "2026-01-01 00:00:00.000").unwrap();
+
+        // They remove it another way, then change their mind and sign afresh.
+        unsign(&conn, 99, "2026-01-01 00:00:00.000").unwrap();
+        sign_at(&conn, 99, "a", "2026-02-01 00:00:00.000");
+
+        // Submitting the stale confirmation now must leave the new one alone.
+        let (github_id, signed_at) = pending_unsign_take(&conn, "tok").unwrap().unwrap();
+        assert_eq!(unsign(&conn, github_id, &signed_at).unwrap(), None);
+        assert_eq!(logins(&conn), ["a"], "the later signature survives");
     }
 
     #[test]
     fn expired_confirmations_are_refused() {
         let conn = fresh();
         conn.execute(
-            "INSERT INTO pending_unsign (token, github_id, expires_at)
-             VALUES ('old', 99, datetime('now', '-1 minute'))",
+            "INSERT INTO pending_unsign (token, github_id, signed_at, expires_at)
+             VALUES ('old', 99, '2026-01-01 00:00:00.000', datetime('now', '-1 minute'))",
             [],
         )
         .unwrap();

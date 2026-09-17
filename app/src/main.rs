@@ -467,7 +467,7 @@ async fn callback(
                     return Ok(None);
                 };
                 let token = cookies::token();
-                db::pending_unsign_create(&conn, &token, user.id)?;
+                db::pending_unsign_create(&conn, &token, user.id, &roll[position].signed_at)?;
                 Ok(Some((
                     roll[position].login.clone(),
                     render::rank(position),
@@ -519,7 +519,7 @@ async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> 
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match db::pending_unsign_take(&conn, &form.token) {
-            Ok(Some(github_id)) => db::unsign(&conn, github_id).map(Some),
+            Ok(Some((github_id, signed_at))) => db::unsign(&conn, github_id, &signed_at).map(Some),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
         }
@@ -530,8 +530,14 @@ async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> 
             println!("removed: {login}");
             (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response()
         }
-        // The pending token was valid but the row had already gone.
-        Ok(Some(None)) => (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response(),
+        // The token was valid but pinned to a signature that is no longer
+        // there. Saying so beats redirecting as though it had worked.
+        Ok(Some(None)) => oops(
+            &app,
+            StatusCode::NOT_FOUND,
+            "Nothing to remove",
+            "That confirmation was for a signature that is no longer there.",
+        ),
         Ok(None) => oops(
             &app,
             StatusCode::BAD_REQUEST,

@@ -234,9 +234,8 @@ pub fn confirm_unsign(
         esc(login)
     );
     s.push_str(
-        "<p>The numbers are positions, oldest signature first. Remove yours and \
-         everyone below moves up; sign again later and you join the end of the \
-         list rather than returning to this spot.</p>\n",
+        "<p>If you remove your signature now and sign again later, you'll join \
+         the end of the list rather than returning to this spot.</p>\n",
     );
     let _ = write!(
         s,
@@ -275,6 +274,7 @@ mod tests {
             .map(|(i, l)| Signatory {
                 github_id: i as i64 + 1,
                 login: (*l).to_string(),
+                signed_at: format!("2026-01-{:02} 00:00:00.000", i + 1),
             })
             .collect()
     }
