@@ -19,7 +19,11 @@ const SUBTITLE: &str = "Do you speak it?";
 const DESCRIPTION: &str = "We are tired of harness engineering, agent orchestration, \
                            spec-driven development and everything else getting in the \
                            way of shipping software.";
-const REPO_URL: &str = "https://github.com/flipbit03/just-prompt-motherfucker";
+pub const REPO: &str = "flipbit03/just-prompt-motherfucker";
+
+/// The GitHub mark, from primer/octicons (MIT). Inlined so the footer costs no
+/// extra request and no third party sees who visits.
+const GITHUB_MARK: &str = r##"<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg>"##;
 
 /// sha256 of the manifesto as this build embeds it. Stored per signature so
 /// the exact text someone signed stays identifiable after an edit.
@@ -75,6 +79,27 @@ fn thousands(n: i64) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
+/// 934 -> "934", 1_250 -> "1.2k", 109_500 -> "110k", 2_400_000 -> "2.4m".
+fn compact(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => scaled(n, 1_000, 'k'),
+        _ => scaled(n, 1_000_000, 'm'),
+    }
+}
+
+fn scaled(n: u64, unit: u64, suffix: char) -> String {
+    let whole = n / unit;
+    if whole >= 10 {
+        // Past ten there is no room for a decimal: round to the nearest unit.
+        return format!("{}{suffix}", (n + unit / 2) / unit);
+    }
+    match (n % unit) * 10 / unit {
+        0 => format!("{whole}{suffix}"),
+        tenth => format!("{whole}.{tenth}{suffix}"),
+    }
+}
+
 fn head(base_url: &str, s: &mut String) {
     let url = format!("{base_url}/");
     s.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
@@ -109,14 +134,23 @@ fn head(base_url: &str, s: &mut String) {
     s.push_str("</head>\n<body>\n");
 }
 
-fn footer(s: &mut String) {
-    s.push_str("<footer>\n<p>\n");
-    let _ = writeln!(
+fn footer(s: &mut String, stars: Option<u64>) {
+    s.push_str("<footer>\n");
+    let _ = write!(
         s,
-        "The whole website is one Rust binary. <a href=\"{REPO_URL}\">Read it</a>.<br>"
+        "<a class=\"gh\" href=\"https://github.com/{REPO}\">{GITHUB_MARK}<span>"
     );
+    // No number when the count could not be fetched, rather than a zero that
+    // cannot be told apart from a repository nobody has starred.
+    match stars {
+        Some(n) => {
+            let _ = writeln!(s, "{}</span></a>", compact(n));
+        }
+        None => s.push_str("GitHub</span></a>\n"),
+    }
     s.push_str(
-        "The manifesto is CC&nbsp;BY&nbsp;4.0. The code is MIT.\n</p>\n</footer>\n</body>\n</html>\n",
+        "<p>The manifesto is CC&nbsp;BY&nbsp;4.0. The code is MIT.</p>\n\
+         </footer>\n</body>\n</html>\n",
     );
 }
 
@@ -127,7 +161,7 @@ pub fn rank(index: usize) -> usize {
 }
 
 /// The front page: the manifesto, then everyone who has signed it.
-pub fn page(base_url: &str, csrf: &str, roll: &[Signatory]) -> String {
+pub fn page(base_url: &str, csrf: &str, stars: Option<u64>, roll: &[Signatory]) -> String {
     let count = (db::FOUNDERS.len() + roll.len()) as i64;
     let mut s = String::with_capacity(32 * 1024);
     head(base_url, &mut s);
@@ -181,13 +215,19 @@ pub fn page(base_url: &str, csrf: &str, roll: &[Signatory]) -> String {
     );
     s.push_str("</section>\n</main>\n");
 
-    footer(&mut s);
+    footer(&mut s, stars);
     s
 }
 
 /// Confirmation before removal: ordinals are permanent, so unsigning gives up
 /// a number for good and should not happen on a single click.
-pub fn confirm_unsign(base_url: &str, login: &str, ordinal: i64, token: &str) -> String {
+pub fn confirm_unsign(
+    base_url: &str,
+    stars: Option<u64>,
+    login: &str,
+    ordinal: i64,
+    token: &str,
+) -> String {
     let mut s = String::with_capacity(8 * 1024);
     head(base_url, &mut s);
     s.push_str("<main>\n<h1>Remove your signature?</h1>\n");
@@ -209,12 +249,12 @@ pub fn confirm_unsign(base_url: &str, login: &str, ordinal: i64, token: &str) ->
         esc(token)
     );
     s.push_str("<p><a href=\"/\">No, keep it</a></p>\n</main>\n");
-    footer(&mut s);
+    footer(&mut s, stars);
     s
 }
 
 /// A small standalone page for the paths that are not the manifesto.
-pub fn notice(base_url: &str, heading: &str, body: &str) -> String {
+pub fn notice(base_url: &str, stars: Option<u64>, heading: &str, body: &str) -> String {
     let mut s = String::with_capacity(8 * 1024);
     head(base_url, &mut s);
     let _ = write!(
@@ -223,7 +263,7 @@ pub fn notice(base_url: &str, heading: &str, body: &str) -> String {
         esc(heading),
         esc(body)
     );
-    footer(&mut s);
+    footer(&mut s, stars);
     s
 }
 
@@ -259,14 +299,19 @@ mod tests {
 
     #[test]
     fn an_empty_roll_still_counts_the_founders() {
-        let html = page("http://localhost:8100", "csrf0", &[]);
+        let html = page("http://localhost:8100", "csrf0", None, &[]);
         assert!(html.contains("2 signatures and counting"));
         assert!(html.contains("Nobody yet"));
     }
 
     #[test]
     fn the_list_is_numbered_contiguously_after_the_founders() {
-        let html = page("http://localhost:8100", "csrf0", &roll(&["a", "b", "c"]));
+        let html = page(
+            "http://localhost:8100",
+            "csrf0",
+            Some(12),
+            &roll(&["a", "b", "c"]),
+        );
         assert!(html.contains("5 signatures and counting"));
         let list = signer_list(&html);
         for n in ["#3", "#4", "#5"] {
@@ -293,7 +338,7 @@ mod tests {
         let mut r = roll(&["oldest", "newest"]);
         r[0].github_id = 9_999_999;
         r[1].github_id = 1;
-        let list = signer_list(&page("http://localhost:8100", "csrf0", &r));
+        let list = signer_list(&page("http://localhost:8100", "csrf0", None, &r));
         let third = list.find("#3").unwrap();
         let fourth = list.find("#4").unwrap();
         assert!(third < fourth);
@@ -303,9 +348,35 @@ mod tests {
 
     #[test]
     fn logins_are_escaped() {
-        let html = page("http://localhost:8100", "csrf0", &roll(&["<script>"]));
+        let html = page("http://localhost:8100", "csrf0", None, &roll(&["<script>"]));
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn a_missing_star_count_shows_no_number() {
+        let html = page("http://localhost:8100", "csrf0", None, &[]);
+        assert!(
+            html.contains(">GitHub</span>"),
+            "should fall back to a label"
+        );
+        assert!(
+            !html.contains(">0</span>"),
+            "0 stars and no answer must differ"
+        );
+    }
+
+    #[test]
+    fn star_counts_are_compact() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(7), "7");
+        assert_eq!(compact(999), "999");
+        assert_eq!(compact(1_000), "1k");
+        assert_eq!(compact(1_250), "1.2k");
+        assert_eq!(compact(9_940), "9.9k");
+        assert_eq!(compact(12_400), "12k");
+        assert_eq!(compact(109_500), "110k");
+        assert_eq!(compact(2_400_000), "2.4m");
     }
 
     #[test]

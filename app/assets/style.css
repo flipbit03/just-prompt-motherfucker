@@ -164,3 +164,21 @@ footer a { color: var(--muted); }
 }
 
 .unsign button:hover { background: none; color: var(--fg); }
+
+/* The GitHub link in the footer: mark plus star count, filled in server-side. */
+.gh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.3em 0.7em;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.82em;
+  line-height: 1;
+  text-decoration: none;
+  color: var(--fg);
+}
+
+.gh:hover { background: var(--th-bg); }
+.gh svg { display: block; }

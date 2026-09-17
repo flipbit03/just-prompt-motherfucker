@@ -13,6 +13,32 @@ const UA: &str = concat!("jpmf/", env!("CARGO_PKG_VERSION"));
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+pub fn client() -> Result<reqwest::Client, Error> {
+    Ok(reqwest::Client::builder().user_agent(UA).build()?)
+}
+
+/// The repository's star count.
+///
+/// Unauthenticated, so GitHub allows 60 of these an hour per IP and answers
+/// 404 for a private repository. The caller is expected to poll slowly and to
+/// carry on without a number when this fails.
+pub async fn stars(http: &reqwest::Client, repo: &str) -> Result<u64, Error> {
+    #[derive(Deserialize)]
+    struct Repo {
+        stargazers_count: u64,
+    }
+
+    let res = http
+        .get(format!("https://api.github.com/repos/{repo}"))
+        .send()
+        .await?;
+    let status = res.status();
+    if !status.is_success() {
+        return Err(format!("github /repos/{repo} returned {status}").into());
+    }
+    Ok(res.json::<Repo>().await?.stargazers_count)
+}
+
 #[derive(Clone)]
 pub struct Oauth {
     client_id: String,

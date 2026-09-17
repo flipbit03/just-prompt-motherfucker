@@ -7,7 +7,9 @@ mod render;
 
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::{
     Form, Router,
@@ -80,6 +82,40 @@ struct App {
     oauth: Option<github::Oauth>,
     /// Secure cookies only over https, or the browser drops them in dev.
     secure: bool,
+    /// Refreshed on a timer; negative until the first successful fetch.
+    star_count: Arc<AtomicI64>,
+}
+
+impl App {
+    fn stars(&self) -> Option<u64> {
+        let n = self.star_count.load(Ordering::Relaxed);
+        (n >= 0).then_some(n as u64)
+    }
+}
+
+/// GitHub allows 60 unauthenticated calls an hour per IP. Six.
+const STAR_REFRESH: Duration = Duration::from_secs(600);
+
+/// Poll the star count in the background so no request ever waits on GitHub.
+/// A private repository answers 404 here, which is a warning and nothing more:
+/// the footer simply shows no number.
+fn watch_stars(star_count: Arc<AtomicI64>) {
+    tokio::spawn(async move {
+        let http = match github::client() {
+            Ok(http) => http,
+            Err(err) => {
+                eprintln!("no http client for the star count: {err}");
+                return;
+            }
+        };
+        loop {
+            match github::stars(&http, render::REPO).await {
+                Ok(n) => star_count.store(n as i64, Ordering::Relaxed),
+                Err(err) => eprintln!("star count unavailable: {err}"),
+            }
+            tokio::time::sleep(STAR_REFRESH).await;
+        }
+    });
 }
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -128,7 +164,9 @@ async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
         base_url: cfg.base_url.as_str().into(),
         oauth,
         secure: cfg.base_url.starts_with("https://"),
+        star_count: Arc::new(AtomicI64::new(-1)),
     };
+    watch_stars(app.star_count.clone());
 
     let router = Router::new()
         .route("/", get(index))
@@ -157,7 +195,11 @@ async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
 // ---------------------------------------------------------------- rendering
 
 fn oops(app: &App, status: StatusCode, heading: &str, body: &str) -> Response {
-    (status, Html(render::notice(&app.base_url, heading, body))).into_response()
+    (
+        status,
+        Html(render::notice(&app.base_url, app.stars(), heading, body)),
+    )
+        .into_response()
 }
 
 /// The manifesto, then everyone who signed it. Rendered per request so there
@@ -165,6 +207,7 @@ fn oops(app: &App, status: StatusCode, heading: &str, body: &str) -> Response {
 async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
     // Reuse the existing cookie so a form open in another tab still submits.
     let csrf = cookies::get(&headers, cookies::CSRF).unwrap_or_else(cookies::token);
+    let stars = app.stars();
 
     let rendered = (|| -> rusqlite::Result<String> {
         // Nothing is awaited while the lock is held.
@@ -172,7 +215,7 @@ async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
             .db
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        Ok(render::page(&app.base_url, &csrf, &db::roll(&conn)?))
+        Ok(render::page(&app.base_url, &csrf, stars, &db::roll(&conn)?))
     })();
 
     match rendered {
@@ -355,13 +398,17 @@ async fn callback(
     // so both intents stop here for them.
     if db::is_founder(user.id) {
         println!("founder tried to {}: {}", intent.as_str(), user.login);
+        let heading = match intent {
+            Intent::Sign => "You are already in it!",
+            Intent::Unsign => "You cannot be removed!",
+        };
         return (
             [(header::SET_COOKIE, clear)],
             Html(render::notice(
                 &app.base_url,
-                "You are already in it",
-                "You are named in the manifesto itself. That signature is not a \
-                 row in any table and cannot be added or taken away.",
+                app.stars(),
+                heading,
+                "You are named in the manifesto itself.",
             )),
         )
             .into_response();
@@ -433,6 +480,7 @@ async fn callback(
                     [(header::SET_COOKIE, clear)],
                     Html(render::confirm_unsign(
                         &app.base_url,
+                        app.stars(),
                         &login,
                         n as i64,
                         &token,
