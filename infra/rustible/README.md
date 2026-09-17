@@ -1,16 +1,28 @@
 # infra/rustible
 
-Rustible workspace for the one machine this runs on.
+Rustible workspace for the machine this site runs on.
 
-Not yet initialised — `rustible init` goes here. It owns only what a deploy
-cannot renew on its own:
+```sh
+cd infra/rustible
+rustible inventory check                 # validate hosts.kdl
+rustible playbook run playbooks/jpmf.rs --check   # dry run, changes nothing
+rustible playbook run playbooks/jpmf.rs           # apply
+```
 
-- the `jpmf` user and its `authorized_keys` entry for the deploy workflow
-- `loginctl enable-linger jpmf`, so the user service survives logout and starts
-  at boot
-- `/etc/caddy/conf.d/jpmf.caddy` — apex 301s to www, www reverse-proxies to
-  `127.0.0.1:8100`, with `encode zstd gzip`
+It owns only what a deploy cannot renew on its own:
 
-Everything else — the binary, the systemd unit, the `.env` — is written by
-`.github/workflows/deploy.yml` on every release, and `jpmf.db` is written by
-nothing but the app itself.
+- the `jpmf` user and its home
+- the deploy workflow's public key in `~jpmf/.ssh/authorized_keys`, plus
+  flipbit03's GitHub keys so a human can log in as `jpmf` directly
+- `loginctl enable-linger jpmf`, without which the user service stops at
+  logout and does not return after a reboot
+- `/etc/caddy/conf.d/jpmf.caddy`
+
+Everything else is written on every release by `.github/workflows/deploy.yml`:
+the binary, `~jpmf/.config/systemd/user/jpmf.service`, and `.env`. The
+database is written by the app and by nothing else.
+
+**Precondition:** `/etc/caddy/Caddyfile` must import `/etc/caddy/conf.d/*.caddy`
+and that directory must exist. The Caddyfile belongs to the machine's own
+provisioning, so this playbook writes one file into `conf.d/` and never touches
+the Caddyfile itself.

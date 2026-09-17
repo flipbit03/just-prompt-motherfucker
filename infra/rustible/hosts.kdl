@@ -1,0 +1,4 @@
+// Inventory. `rustible inventory check` validates this file;
+// `rustible inventory show outpost` prints what the host resolves to.
+
+host "outpost" addr="outpost.flipbit03.com" ssh_user="cadu" escalate="sudo"
