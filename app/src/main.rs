@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 }
 
 async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let conn = db::open(&cfg.db, render::manifesto_sha())?;
+    let conn = db::open(&cfg.db)?;
 
     let oauth = match (&cfg.client_id, &cfg.client_secret) {
         (Some(id), Some(secret)) => Some(github::Oauth::new(
@@ -172,9 +172,7 @@ async fn index(State(app): State<App>, headers: HeaderMap) -> Response {
             .db
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let count = db::count(&conn)?;
-        let signers = db::signatures(&conn)?;
-        Ok(render::page(&app.base_url, &csrf, count, &signers))
+        Ok(render::page(&app.base_url, &csrf, &db::roll(&conn)?))
     })();
 
     match rendered {
@@ -353,43 +351,50 @@ async fn callback(
         } // The token drops here. It is never stored.
     };
 
+    // Founders are not rows. There is nothing to insert and nothing to delete,
+    // so both intents stop here for them.
+    if db::is_founder(user.id) {
+        return (
+            [(header::SET_COOKIE, clear)],
+            Html(render::notice(
+                &app.base_url,
+                "You are already in it",
+                "You are named in the manifesto itself. That signature is not a \
+                 row in any table and cannot be added or taken away.",
+            )),
+        )
+            .into_response();
+    }
+
     match intent {
         Intent::Sign => {
-            let result = {
+            let placed = (|| -> rusqlite::Result<Option<usize>> {
                 let conn = app
                     .db
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                db::sign(&conn, user.id, &user.login, render::manifesto_sha())
-            };
-            match result {
-                Ok(signed) => {
-                    println!("signed: {} (#{})", user.login, signed.ordinal);
-                    if signed.in_body {
-                        // Leandro and Cadu are named in the manifesto, so they
-                        // never appear in the list and would otherwise land
-                        // back on a page that looks unchanged.
-                        (
-                            [(header::SET_COOKIE, clear)],
-                            Html(render::notice(
-                                &app.base_url,
-                                "You are already in it",
-                                "You are named in the manifesto itself, so you do not appear \
-                                 again in the list below it.",
-                            )),
-                        )
-                            .into_response()
-                    } else {
-                        // Anchor on their own line, so they land on it.
-                        (
-                            StatusCode::SEE_OTHER,
-                            [
-                                (header::LOCATION, format!("/#s{}", signed.ordinal)),
-                                (header::SET_COOKIE, clear),
-                            ],
-                        )
-                            .into_response()
-                    }
+                db::sign(&conn, user.id, &user.login, render::manifesto_sha())?;
+                // Their number is a position, so it has to be read back off the
+                // roll rather than returned by the insert.
+                Ok(db::roll(&conn)?
+                    .iter()
+                    .position(|s| s.github_id == user.id)
+                    .map(render::rank))
+            })();
+
+            match placed {
+                Ok(position) => {
+                    let n = position.unwrap_or_default();
+                    println!("signed: {} (#{n})", user.login);
+                    (
+                        StatusCode::SEE_OTHER,
+                        [
+                            // Anchor on their own line, so they land on it.
+                            (header::LOCATION, format!("/#s{n}")),
+                            (header::SET_COOKIE, clear),
+                        ],
+                    )
+                        .into_response()
                 }
                 Err(err) => {
                     eprintln!("could not record signature for {}: {err}", user.login);
@@ -404,30 +409,31 @@ async fn callback(
         }
 
         Intent::Unsign => {
-            let found = {
+            let found = (|| -> rusqlite::Result<Option<(String, usize, String)>> {
                 let conn = app
                     .db
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let existing = db::find(&conn, user.id);
-                match existing {
-                    Ok(Some(sig)) => {
-                        let token = cookies::token();
-                        db::pending_unsign_create(&conn, &token, user.id)
-                            .map(|()| Some((sig, token)))
-                    }
-                    Ok(None) => Ok(None),
-                    Err(err) => Err(err),
-                }
-            };
+                let roll = db::roll(&conn)?;
+                let Some(position) = roll.iter().position(|s| s.github_id == user.id) else {
+                    return Ok(None);
+                };
+                let token = cookies::token();
+                db::pending_unsign_create(&conn, &token, user.id)?;
+                Ok(Some((
+                    roll[position].login.clone(),
+                    render::rank(position),
+                    token,
+                )))
+            })();
 
             match found {
-                Ok(Some((sig, token))) => (
+                Ok(Some((login, n, token))) => (
                     [(header::SET_COOKIE, clear)],
                     Html(render::confirm_unsign(
                         &app.base_url,
-                        &sig.login,
-                        sig.ordinal,
+                        &login,
+                        n as i64,
                         &token,
                     )),
                 )
@@ -471,8 +477,8 @@ async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> 
     };
 
     match outcome {
-        Ok(Some(Some(gone))) => {
-            println!("removed: {} (#{})", gone.login, gone.ordinal);
+        Ok(Some(Some(login))) => {
+            println!("removed: {login}");
             (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response()
         }
         // The pending token was valid but the row had already gone.

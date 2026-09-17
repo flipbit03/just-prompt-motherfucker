@@ -5,24 +5,32 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension as _, Result};
 
-/// A signature as the page needs it. Everything else stays in the database.
-pub struct Signature {
-    pub ordinal: i64,
+/// Named in the manifesto itself. They are not rows — there is nothing to
+/// insert and nothing to delete, so a founder cannot be revoked. They hold the
+/// first display positions, and the list below the manifesto starts after them.
+pub const FOUNDERS: &[(i64, &str)] = &[(385_640, "leandronsp"), (5_620_032, "flipbit03")];
+
+pub fn is_founder(github_id: i64) -> bool {
+    FOUNDERS.iter().any(|(id, _)| *id == github_id)
+}
+
+/// A signature. The number shown on the page is this row's position in
+/// `roll`, worked out at render time, so nothing here stores a display number.
+pub struct Signatory {
+    pub github_id: i64,
     pub login: String,
 }
 
-/// AUTOINCREMENT, not a plain INTEGER PRIMARY KEY: without it SQLite reuses
-/// the highest rowid after a delete and the next signer inherits a departed
-/// one's number. Gaps are correct.
+/// `github_id` is the primary key: it is the identity that matters, it never
+/// changes under a rename, and using it directly removes the need for any
+/// surrogate id. `signed_at` carries milliseconds because it is the sort key.
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS signatures (
-    ordinal       INTEGER PRIMARY KEY AUTOINCREMENT,
-    github_id     INTEGER NOT NULL UNIQUE,
-    login         TEXT    NOT NULL,
-    manifesto_sha TEXT    NOT NULL,
-    in_body       INTEGER NOT NULL DEFAULT 0,
+    github_id     INTEGER PRIMARY KEY,
+    login         TEXT NOT NULL,
+    manifesto_sha TEXT NOT NULL,
     hidden_at     TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    signed_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
 );
 
 -- With no sessions, this carries a proven identity from the OAuth callback to
@@ -34,11 +42,7 @@ CREATE TABLE IF NOT EXISTS pending_unsign (
 );
 ";
 
-/// Seeded as rows 1 and 2 because they sign in the body, not the list. Keeps
-/// the count honest with no offset, and leaves the first signer at #3.
-const FOUNDERS: [(i64, &str); 2] = [(385_640, "leandronsp"), (5_620_032, "flipbit03")];
-
-pub fn open(path: &Path, manifesto_sha: &str) -> Result<Connection> {
+pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
@@ -47,136 +51,55 @@ pub fn open(path: &Path, manifesto_sha: &str) -> Result<Connection> {
          PRAGMA foreign_keys = ON;",
     )?;
     conn.execute_batch(SCHEMA)?;
-
-    for (ordinal, (github_id, login)) in FOUNDERS.iter().enumerate() {
-        conn.execute(
-            "INSERT OR IGNORE INTO signatures
-                 (ordinal, github_id, login, manifesto_sha, in_body)
-             VALUES (?1, ?2, ?3, ?4, 1)",
-            rusqlite::params![(ordinal + 1) as i64, github_id, login, manifesto_sha],
-        )?;
-    }
-
     Ok(conn)
 }
 
-/// Everyone who has signed, founders included. This is the number on the page.
-pub fn count(conn: &Connection) -> Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM signatures WHERE hidden_at IS NULL",
-        [],
-        |row| row.get(0),
-    )
-}
-
-/// Everyone who appears under "Also signed:" — which excludes the two who are
-/// already named in the manifesto itself.
-pub fn signatures(conn: &Connection) -> Result<Vec<Signature>> {
+/// Everyone who has signed, oldest first. Hidden rows are left out entirely so
+/// that moderation does not leave a hole in the numbering.
+///
+/// `github_id` breaks ties, so two signatures in the same millisecond still
+/// order deterministically rather than swapping places between requests.
+pub fn roll(conn: &Connection) -> Result<Vec<Signatory>> {
     let mut stmt = conn.prepare(
-        "SELECT ordinal, login
+        "SELECT github_id, login
            FROM signatures
-          WHERE in_body = 0 AND hidden_at IS NULL
-          ORDER BY ordinal",
+          WHERE hidden_at IS NULL
+          ORDER BY signed_at, github_id",
     )?;
     let rows = stmt.query_map([], |row| {
-        Ok(Signature {
-            ordinal: row.get(0)?,
+        Ok(Signatory {
+            github_id: row.get(0)?,
             login: row.get(1)?,
         })
     })?;
     rows.collect()
 }
 
-/// `VACUUM INTO` runs in a read transaction and writes one compact file with
-/// the WAL folded in, so this is safe while the site is serving. It refuses to
-/// overwrite.
-pub fn backup(src: &Path, dest: &Path) -> Result<()> {
-    let conn = Connection::open(src)?;
-    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
-    Ok(())
-}
-
-pub struct Signed {
-    pub ordinal: i64,
-    /// Named in the manifesto itself, so absent from the list below it.
-    pub in_body: bool,
-}
-
-/// Record a signature, or refresh a known signer's handle, returning their
-/// ordinal either way.
+/// Record a signature, or refresh a known signer's handle.
 ///
-/// Looks before inserting rather than using ON CONFLICT: an upsert allocates
-/// an AUTOINCREMENT value before it detects the conflict, so every repeat
-/// click would push the next new signer's number up by one.
-pub fn sign(conn: &Connection, github_id: i64, login: &str, manifesto_sha: &str) -> Result<Signed> {
-    let tx = conn.unchecked_transaction()?;
-
-    let existing = tx
-        .query_row(
-            "SELECT ordinal, in_body FROM signatures WHERE github_id = ?1",
-            [github_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? != 0)),
-        )
-        .optional()?;
-
-    let signed = match existing {
-        Some((ordinal, in_body)) => {
-            // Only the handle. Not the ordinal, and not hidden_at.
-            tx.execute(
-                "UPDATE signatures SET login = ?2 WHERE github_id = ?1",
-                rusqlite::params![github_id, login],
-            )?;
-            Signed { ordinal, in_body }
-        }
-        None => {
-            let ordinal = tx.query_row(
-                "INSERT INTO signatures (github_id, login, manifesto_sha)
-                      VALUES (?1, ?2, ?3)
-                   RETURNING ordinal",
-                rusqlite::params![github_id, login, manifesto_sha],
-                |row| row.get(0),
-            )?;
-            Signed {
-                ordinal,
-                in_body: false,
-            }
-        }
-    };
-
-    tx.commit()?;
-    Ok(signed)
-}
-
-/// Used by the confirmation page to name the number about to be given up.
-pub fn find(conn: &Connection, github_id: i64) -> Result<Option<Signature>> {
-    conn.query_row(
-        "SELECT ordinal, login FROM signatures WHERE github_id = ?1",
-        [github_id],
-        |row| {
-            Ok(Signature {
-                ordinal: row.get(0)?,
-                login: row.get(1)?,
-            })
-        },
-    )
-    .optional()
+/// Only the handle: `signed_at` is left alone, so signing again does not move
+/// someone to the end of the list, and `hidden_at` is left alone, so it cannot
+/// un-hide a moderated row.
+pub fn sign(conn: &Connection, github_id: i64, login: &str, manifesto_sha: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO signatures (github_id, login, manifesto_sha)
+              VALUES (?1, ?2, ?3)
+         ON CONFLICT(github_id) DO UPDATE SET login = excluded.login",
+        rusqlite::params![github_id, login, manifesto_sha],
+    )?;
+    Ok(())
 }
 
 /// A real delete: they asked for their data gone. `hidden_at` is for
 /// moderation, where the record should survive.
 ///
-/// Returns the row that went, so the removal can be logged — otherwise nothing
-/// anywhere records that a signature ever existed.
-pub fn unsign(conn: &Connection, github_id: i64) -> Result<Option<Signature>> {
+/// Returns the handle that went, so the removal reaches the log — nothing else
+/// records that a signature ever existed.
+pub fn unsign(conn: &Connection, github_id: i64) -> Result<Option<String>> {
     conn.query_row(
-        "DELETE FROM signatures WHERE github_id = ?1 RETURNING ordinal, login",
+        "DELETE FROM signatures WHERE github_id = ?1 RETURNING login",
         [github_id],
-        |row| {
-            Ok(Signature {
-                ordinal: row.get(0)?,
-                login: row.get(1)?,
-            })
-        },
+        |row| row.get(0),
     )
     .optional()
 }
@@ -209,83 +132,114 @@ pub fn pending_unsign_take(conn: &Connection, token: &str) -> Result<Option<i64>
     .optional()
 }
 
+/// `VACUUM INTO` runs in a read transaction and writes one compact file with
+/// the WAL folded in, so this is safe while the site is serving. It refuses to
+/// overwrite.
+pub fn backup(src: &Path, dest: &Path) -> Result<()> {
+    let conn = Connection::open(src)?;
+    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fresh() -> Connection {
-        open(Path::new(":memory:"), "testsha").unwrap()
+        open(Path::new(":memory:")).unwrap()
     }
 
-    fn seq(conn: &Connection) -> i64 {
-        conn.query_row(
-            "SELECT seq FROM sqlite_sequence WHERE name = 'signatures'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
+    fn logins(conn: &Connection) -> Vec<String> {
+        roll(conn).unwrap().into_iter().map(|s| s.login).collect()
     }
 
-    #[test]
-    fn founders_are_seeded_and_hidden_from_the_list() {
-        let conn = fresh();
-        assert_eq!(count(&conn).unwrap(), 2);
-        assert!(signatures(&conn).unwrap().is_empty());
-        assert_eq!(seq(&conn), 2, "first real signer should be #3");
-    }
-
-    #[test]
-    fn repeat_signing_keeps_the_number_and_burns_none() {
-        let conn = fresh();
-        let first = sign(&conn, 99, "someone", "sha").unwrap();
-        assert_eq!(first.ordinal, 3);
-        assert!(!first.in_body);
-
-        for _ in 0..5 {
-            let again = sign(&conn, 99, "renamed", "sha").unwrap();
-            assert_eq!(again.ordinal, 3, "repeat signing must not reissue");
-        }
-        assert_eq!(seq(&conn), 3, "repeat signing must not consume ordinals");
-
-        let next = sign(&conn, 100, "next", "sha").unwrap();
-        assert_eq!(next.ordinal, 4, "the next signer gets the next number");
-        assert_eq!(signatures(&conn).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn signing_as_a_founder_reports_in_body() {
-        let conn = fresh();
-        let signed = sign(&conn, 5_620_032, "flipbit03", "sha").unwrap();
-        assert_eq!(signed.ordinal, 2);
-        assert!(signed.in_body);
-        assert!(signatures(&conn).unwrap().is_empty());
-        assert_eq!(count(&conn).unwrap(), 2);
-    }
-
-    #[test]
-    fn repeat_signing_cannot_unhide_a_moderated_row() {
-        let conn = fresh();
-        sign(&conn, 99, "someone", "sha").unwrap();
+    /// Signatures land in the same millisecond in a test, so the tie-break has
+    /// to do the work. Force distinct times where order is what is being tested.
+    fn sign_at(conn: &Connection, github_id: i64, login: &str, at: &str) {
+        sign(conn, github_id, login, "sha").unwrap();
         conn.execute(
-            "UPDATE signatures SET hidden_at = datetime('now') WHERE github_id = 99",
+            "UPDATE signatures SET signed_at = ?2 WHERE github_id = ?1",
+            rusqlite::params![github_id, at],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_new_database_holds_no_founders() {
+        let conn = fresh();
+        assert!(roll(&conn).unwrap().is_empty());
+        assert!(is_founder(385_640));
+        assert!(is_founder(5_620_032));
+        assert!(!is_founder(99));
+    }
+
+    #[test]
+    fn the_roll_is_oldest_first() {
+        let conn = fresh();
+        sign_at(&conn, 30, "third", "2026-03-01 00:00:00.000");
+        sign_at(&conn, 10, "first", "2026-01-01 00:00:00.000");
+        sign_at(&conn, 20, "second", "2026-02-01 00:00:00.000");
+        assert_eq!(logins(&conn), ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn signing_again_keeps_your_place_and_refreshes_the_handle() {
+        let conn = fresh();
+        sign_at(&conn, 10, "first", "2026-01-01 00:00:00.000");
+        sign_at(&conn, 20, "second", "2026-02-01 00:00:00.000");
+
+        // A rename, long after the fact.
+        sign(&conn, 10, "renamed", "sha").unwrap();
+        assert_eq!(
+            logins(&conn),
+            ["renamed", "second"],
+            "re-signing must not move anyone to the end"
+        );
+    }
+
+    #[test]
+    fn removing_closes_the_gap_and_re_signing_goes_to_the_end() {
+        let conn = fresh();
+        sign_at(&conn, 10, "a", "2026-01-01 00:00:00.000");
+        sign_at(&conn, 20, "b", "2026-02-01 00:00:00.000");
+        sign_at(&conn, 30, "c", "2026-03-01 00:00:00.000");
+
+        assert_eq!(unsign(&conn, 20).unwrap().as_deref(), Some("b"));
+        assert_eq!(unsign(&conn, 20).unwrap(), None, "already gone");
+        assert_eq!(logins(&conn), ["a", "c"], "the list closes up");
+
+        sign_at(&conn, 20, "b", "2026-04-01 00:00:00.000");
+        assert_eq!(logins(&conn), ["a", "c", "b"], "b rejoins at the end");
+    }
+
+    #[test]
+    fn hidden_rows_leave_no_hole() {
+        let conn = fresh();
+        sign_at(&conn, 10, "a", "2026-01-01 00:00:00.000");
+        sign_at(&conn, 20, "b", "2026-02-01 00:00:00.000");
+        sign_at(&conn, 30, "c", "2026-03-01 00:00:00.000");
+        conn.execute(
+            "UPDATE signatures SET hidden_at = datetime('now') WHERE github_id = 20",
             [],
         )
         .unwrap();
-        sign(&conn, 99, "someone", "sha").unwrap();
-        assert!(signatures(&conn).unwrap().is_empty(), "still hidden");
+
+        assert_eq!(logins(&conn), ["a", "c"]);
+
+        // A hidden signer re-signing must not bring themselves back.
+        sign(&conn, 20, "b", "sha").unwrap();
+        assert_eq!(logins(&conn), ["a", "c"]);
     }
 
     #[test]
-    fn removing_leaves_a_gap_that_is_never_reused() {
+    fn same_millisecond_signatures_order_deterministically() {
         let conn = fresh();
-        sign(&conn, 99, "a", "sha").unwrap();
-        sign(&conn, 100, "b", "sha").unwrap();
-        let gone = unsign(&conn, 100).unwrap().expect("a row went");
-        assert_eq!((gone.ordinal, gone.login.as_str()), (4, "b"));
-        assert!(unsign(&conn, 100).unwrap().is_none(), "already gone");
-
-        let later = sign(&conn, 101, "c", "sha").unwrap();
-        assert_eq!(later.ordinal, 5, "#4 is gone for good");
+        // Forced to the same instant: without the github_id tie-break these two
+        // could swap places between one request and the next.
+        sign_at(&conn, 50, "higher", "2026-01-01 00:00:00.000");
+        sign_at(&conn, 10, "lower", "2026-01-01 00:00:00.000");
+        assert_eq!(logins(&conn), ["lower", "higher"]);
+        assert_eq!(logins(&conn), ["lower", "higher"]);
     }
 
     #[test]

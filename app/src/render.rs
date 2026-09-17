@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use pulldown_cmark::{Options, Parser, html};
 use sha2::{Digest, Sha256};
 
-use crate::db::Signature;
+use crate::db::{self, Signatory};
 
 /// `include_str!` registers the file as a build dependency, so editing the
 /// markdown triggers a rebuild without a build script.
@@ -120,8 +120,15 @@ fn footer(s: &mut String) {
     );
 }
 
+/// Display number for the nth entry of the roll, counting from zero. The
+/// founders hold the first positions, so the list carries on after them.
+pub fn rank(index: usize) -> usize {
+    db::FOUNDERS.len() + 1 + index
+}
+
 /// The front page: the manifesto, then everyone who has signed it.
-pub fn page(base_url: &str, csrf: &str, count: i64, signers: &[Signature]) -> String {
+pub fn page(base_url: &str, csrf: &str, roll: &[Signatory]) -> String {
+    let count = (db::FOUNDERS.len() + roll.len()) as i64;
     let mut s = String::with_capacity(32 * 1024);
     head(base_url, &mut s);
 
@@ -140,17 +147,17 @@ pub fn page(base_url: &str, csrf: &str, count: i64, signers: &[Signature]) -> St
         thousands(count)
     );
 
-    if signers.is_empty() {
+    if roll.is_empty() {
         s.push_str("<p class=\"nobody\">Nobody yet. Be the first.</p>\n");
     } else {
         s.push_str("<ol class=\"signers\">\n");
-        for sig in signers {
+        for (i, sig) in roll.iter().enumerate() {
+            let n = rank(i);
             let login = esc(&sig.login);
             let _ = writeln!(
                 s,
                 "<li id=\"s{n}\"><span class=\"n\">#{n}</span><a href=\"https://github.com/{login}\" \
                  rel=\"nofollow ugc\">{login}</a></li>",
-                n = sig.ordinal
             );
         }
         s.push_str("</ol>\n");
@@ -186,12 +193,13 @@ pub fn confirm_unsign(base_url: &str, login: &str, ordinal: i64, token: &str) ->
     s.push_str("<main>\n<h1>Remove your signature?</h1>\n");
     let _ = writeln!(
         s,
-        "<p>GitHub says you are <strong>{}</strong>, signature <strong>#{ordinal}</strong>.</p>",
+        "<p>GitHub says you are <strong>{}</strong>, currently <strong>#{ordinal}</strong>.</p>",
         esc(login)
     );
     s.push_str(
-        "<p>Numbers are permanent and never reused. If you sign again later you \
-         will get a new one at the end of the list, not this one back.</p>\n",
+        "<p>The numbers are positions, oldest signature first. Remove yours and \
+         everyone below moves up; sign again later and you join the end of the \
+         list rather than returning to this spot.</p>\n",
     );
     let _ = write!(
         s,
@@ -223,10 +231,19 @@ pub fn notice(base_url: &str, heading: &str, body: &str) -> String {
 mod tests {
     use super::*;
 
+    fn roll(logins: &[&str]) -> Vec<Signatory> {
+        logins
+            .iter()
+            .enumerate()
+            .map(|(i, l)| Signatory {
+                github_id: i as i64 + 1,
+                login: (*l).to_string(),
+            })
+            .collect()
+    }
+
     #[test]
     fn manifesto_renders_its_table() {
-        // ENABLE_TABLES is easy to drop and the failure is silent-ish: the
-        // values table degrades into a paragraph of pipe characters.
         let html = manifesto_html();
         assert!(html.contains("<table>"), "values table did not render");
         assert!(!html.contains("| Autonomous agents |"));
@@ -241,41 +258,52 @@ mod tests {
     }
 
     #[test]
-    fn empty_list_still_shows_the_count() {
-        let html = page("http://localhost:8100", "csrf0", 2, &[]);
+    fn an_empty_roll_still_counts_the_founders() {
+        let html = page("http://localhost:8100", "csrf0", &[]);
         assert!(html.contains("2 signatures and counting"));
         assert!(html.contains("Nobody yet"));
     }
 
     #[test]
-    fn signers_render_with_permanent_ordinals() {
-        let signers = vec![
-            Signature {
-                ordinal: 3,
-                login: "someone".into(),
-            },
-            Signature {
-                ordinal: 7,
-                login: "later".into(),
-            },
-        ];
-        let html = page("http://localhost:8100", "csrf0", 4, &signers);
-        assert!(html.contains("#3"));
-        // Anchored so a fresh signer lands on their own line.
-        assert!(html.contains("id=\"s3\""));
-        assert!(html.contains("id=\"s7\""));
-        // A gap, because #4..#6 unsigned. The numbers must not be renumbered.
-        assert!(html.contains("#7"));
-        assert!(html.contains("rel=\"nofollow ugc\""));
+    fn the_list_is_numbered_contiguously_after_the_founders() {
+        let html = page("http://localhost:8100", "csrf0", &roll(&["a", "b", "c"]));
+        assert!(html.contains("5 signatures and counting"));
+        let list = signer_list(&html);
+        for n in ["#3", "#4", "#5"] {
+            assert!(list.contains(n), "missing {n}");
+        }
+        assert!(!list.contains("#6"), "numbering ran past the end");
+        assert!(!list.contains("#2"), "numbering overlapped the founders");
+        // The count always equals the last number in the list.
+        assert!(list.contains("id=\"s5\""));
+        assert!(list.contains("rel=\"nofollow ugc\""));
+    }
+
+    /// The stylesheet is full of things like `#444a53`, so assertions about
+    /// numbering have to look inside the list and nowhere else.
+    fn signer_list(html: &str) -> String {
+        let start = html.find("<ol class=\"signers\">").expect("no list");
+        let end = html[start..].find("</ol>").expect("unclosed list") + start;
+        html[start..end].to_string()
+    }
+
+    #[test]
+    fn positions_do_not_depend_on_any_stored_number() {
+        // Whoever is oldest is #3, whatever their github_id happens to be.
+        let mut r = roll(&["oldest", "newest"]);
+        r[0].github_id = 9_999_999;
+        r[1].github_id = 1;
+        let list = signer_list(&page("http://localhost:8100", "csrf0", &r));
+        let third = list.find("#3").unwrap();
+        let fourth = list.find("#4").unwrap();
+        assert!(third < fourth);
+        assert!(list[third..fourth].contains("oldest"));
+        assert!(list[fourth..].contains("newest"));
     }
 
     #[test]
     fn logins_are_escaped() {
-        let signers = vec![Signature {
-            ordinal: 3,
-            login: "<script>".into(),
-        }];
-        let html = page("http://localhost:8100", "csrf0", 3, &signers);
+        let html = page("http://localhost:8100", "csrf0", &roll(&["<script>"]));
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }
