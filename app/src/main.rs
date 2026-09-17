@@ -176,6 +176,8 @@ async fn serve(cfg: Config) -> Result<(), Box<dyn Error + Send + Sync>> {
         .route("/auth/callback", get(callback))
         .route("/healthz", get(healthz))
         .route("/robots.txt", get(robots))
+        .fallback(not_found)
+        .method_not_allowed_fallback(not_found)
         .with_state(app);
 
     let listener = TcpListener::bind(&cfg.bind).await?;
@@ -557,6 +559,17 @@ async fn confirm_unsign(State(app): State<App>, Form(form): Form<TokenForm>) -> 
 }
 
 // -------------------------------------------------------------------- plumbing
+
+/// Unknown paths and wrong methods both landed on an empty body, which is the
+/// only page on the site with no design at all.
+async fn not_found(State(app): State<App>) -> Response {
+    oops(
+        &app,
+        StatusCode::NOT_FOUND,
+        "Nothing here",
+        "The manifesto is the whole site.",
+    )
+}
 
 /// The deploy gates on this before it calls a release healthy.
 async fn healthz() -> &'static str {
