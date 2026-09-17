@@ -354,6 +354,7 @@ async fn callback(
     // Founders are not rows. There is nothing to insert and nothing to delete,
     // so both intents stop here for them.
     if db::is_founder(user.id) {
+        println!("founder tried to {}: {}", intent.as_str(), user.login);
         return (
             [(header::SET_COOKIE, clear)],
             Html(render::notice(
