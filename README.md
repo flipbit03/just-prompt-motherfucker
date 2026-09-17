@@ -5,8 +5,6 @@ gatekeeping when it comes to AI agent usage.
 
 Deployed to **https://www.just-prompt-motherfucker.com**
 
----- 
-
 See [CLAUDE.md](CLAUDE.md) for the architecture.
 
 ## Licence
