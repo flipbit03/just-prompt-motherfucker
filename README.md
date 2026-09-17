@@ -71,4 +71,5 @@ text is canonical; it is the one signatures are counted against.
 ## Licence
 
 The manifesto is [CC BY 4.0](manifesto/LICENSE) — copy it, translate it, put it
-on your own site, just credit Leandro and Cadu. The code is [MIT](LICENSE).
+on your own site, just credit Carlos Eduardo Coelho and Leandro Proença. The
+code is [MIT](LICENSE).
