@@ -39,6 +39,31 @@ failure locally too.
 Changing `manifesto/MANIFESTO.md` requires a rebuild — `include_str!` makes it a
 build dependency, so `cargo run` picks it up automatically.
 
+### Looking at the page
+
+If `agent-browser` is on the machine, use it after a layout or stylesheet change
+instead of assuming the change landed.
+
+```sh
+agent-browser --session jpmf set viewport 1280 900
+agent-browser --session jpmf open http://localhost:8100/
+agent-browser --session jpmf screenshot /tmp/shot.png
+agent-browser --session jpmf close
+```
+
+`set viewport 390 844` for the phone layout, `set media dark` for the dark
+palette. Both have caught things that looked fine in the markup.
+
+Measure rather than eyeball when the question is spacing or alignment — `eval`
+returns element rectangles:
+
+```sh
+agent-browser --session jpmf eval 'JSON.stringify(document.querySelector("hr").getBoundingClientRect())'
+```
+
+That is how the gap above and below the `****` divider was found to be uneven,
+and how it was confirmed even afterwards.
+
 ## How a request works
 
 ```
