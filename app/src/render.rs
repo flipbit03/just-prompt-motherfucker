@@ -63,10 +63,17 @@ fn front_matter() -> &'static FrontMatter {
             .map(|p| p.trim_matches('*').trim().to_string())
             .unwrap_or_default();
 
-        // The first paragraph of actual prose becomes the search snippet.
+        // The first paragraph of actual prose becomes the search snippet. The
+        // HTML comment at the top of the manifesto is a paragraph too, and
+        // starts with none of the markers below, so it is excluded by name.
         let description = paras
             .iter()
-            .find(|p| !p.starts_with('#') && !p.starts_with('*') && !p.starts_with('|'))
+            .find(|p| {
+                !p.starts_with('#')
+                    && !p.starts_with('*')
+                    && !p.starts_with('|')
+                    && !p.starts_with("<!--")
+            })
             .map(|p| p.replace(['*', '_'], ""))
             .unwrap_or_default();
 
@@ -365,6 +372,17 @@ mod tests {
             "<meta property=\"og:description\" content=\"{}\">",
             fm.subtitle
         )));
+    }
+
+    /// The manifesto opens with an HTML comment explaining that its first two
+    /// lines feed the page metadata. That comment must not become the metadata.
+    #[test]
+    fn the_manifesto_comment_is_not_mistaken_for_prose() {
+        assert!(MANIFESTO_MD.starts_with("<!--"));
+        let fm = front_matter();
+        assert!(!fm.description.starts_with("<!--"));
+        assert!(!fm.description.contains("load-bearing"));
+        assert!(!fm.title.is_empty() && !fm.subtitle.is_empty());
     }
 
     #[test]

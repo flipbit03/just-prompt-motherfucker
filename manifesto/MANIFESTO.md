@@ -1,3 +1,11 @@
+<!--
+The title below and the emphasised line under it are load-bearing. The site
+parses this file at startup: the `# ` line becomes <title> and og:title, the
+emphasised line becomes og:description, and the first paragraph of prose
+becomes the meta description search engines show. Changing the shape of those
+lines changes the page's metadata. See CLAUDE.md.
+-->
+
 # Just Prompt, Motherfucker
 
 *Do you prompt it?*
