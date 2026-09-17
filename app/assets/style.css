@@ -1,22 +1,13 @@
 /* Inlined into <head> at build time; there is no static asset route. */
 
+/* One theme, the dark one. 14.2 contrast for body text. */
 :root {
-  color-scheme: light dark;
-  --fg: #111;
-  --bg: #fff;
-  --rule: #111;
-  --th-bg: #eee;
-  --muted: #555;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #e6e4e1;
-    --bg: #15171b;
-    --rule: #444a53;
-    --th-bg: #1f232a;
-    --muted: #979da7;
-  }
+  color-scheme: dark;
+  --fg: #e6e4e1;
+  --bg: #15171b;
+  --rule: #444a53;
+  --th-bg: #1f232a;
+  --muted: #979da7;
 }
 
 * { box-sizing: border-box; }
@@ -29,7 +20,7 @@ body {
   color: var(--fg);
   background: var(--bg);
   line-height: 1.5;
-  font-size: 1.1em;
+  font-size: 1.2em;
   text-align: center;
   -webkit-text-size-adjust: 100%;
 }
@@ -57,6 +48,9 @@ h2 {
   line-height: 1.2;
 }
 
+/* Unused by the manifesto as it currently reads, and kept anyway: a text edit
+   or a translation can reintroduce a list, and default list styling sits badly
+   in a centred column. */
 ul {
   padding-left: 0;
   list-style-position: inside;
@@ -87,34 +81,6 @@ td:last-child {
 
 th { background: var(--th-bg); }
 
-/* The divider between the prose and the values table. The markdown says `---`,
-   which is what it actually is; the asterisks are presentation.
-
-   The rule needs a real box: with `border: none` it has zero height, the glyphs
-   render outside it, and since an asterisk sits high on the line the ink lands
-   near the top of the gap and leaves the remainder below. A fixed height with
-   the content centred in it makes the space above and below match. */
-hr {
-  border: none;
-  height: 1.8em;
-  margin: 2em 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-hr::after {
-  content: "****";
-  font-size: 1.5em;
-  line-height: 1;
-  color: var(--fg);
-}
-
-/* The heading after the divider already has the rule's margin below it. */
-hr + h2 {
-  margin-top: 0;
-}
-
 blockquote {
   margin: 2em 0;
   padding: 0;
@@ -123,10 +89,11 @@ blockquote {
 
 /* The signature block, appended below the manifesto. */
 
+/* No rule above this. The manifesto signs off with "And the Just Prompt
+   Motherfuckers" and these are they; a line between the two makes the list
+   read as an appendix to the signature rather than the whole of it. */
 .signatures {
-  margin-top: 3.5em;
-  border-top: 1px solid var(--rule);
-  padding-top: 1em;
+  margin-top: 1em;
 }
 
 .count {
@@ -135,29 +102,32 @@ blockquote {
   margin-top: -0.4em;
 }
 
+/* The names flow straight out of the manifesto's closing line, wrapping as
+   many to a row as fit, rather than sitting in a list of their own. */
 .signers {
   list-style: none;
   padding: 0;
-  margin: 1.5em 0;
-  columns: 2;
-  column-gap: 2em;
+  margin: 0.8em 0 1.6em;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* The row pitch matches a paragraph's line pitch, plus a hair. The names are
+     part of the manifesto, not a list attached to it. */
+  gap: 0.15em 1.2em;
+  line-height: 1.5;
 }
 
-@media (min-width: 40em) {
-  .signers { columns: 3; }
-}
+/* The generic `li` margin is for prose lists; here it doubles the row pitch. */
+.signers li { margin: 0; }
 
-.signers li {
-  break-inside: avoid;
-  margin: 0.3em 0;
-  line-height: 1.4;
-}
+.signers a { text-decoration: none; }
+.signers a:hover { text-decoration: underline; }
 
 .signers .n {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-  margin-right: 0.4em;
-  font-size: 0.9em;
+  margin-right: 0.35em;
+  font-size: 0.85em;
 }
 
 .nobody {
@@ -166,6 +136,9 @@ blockquote {
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
   font-family: inherit;
   font-size: 1.05em;
   padding: 0.6em 1.4em;
@@ -176,6 +149,31 @@ button {
 }
 
 button:hover { background: var(--bg); color: var(--fg); }
+
+/* The list grows without bound, so the button would sink further down the page
+   with every signature. Sticky keeps it within reach while the names are on
+   screen and lets it settle into place at the end — no duplicate button, and
+   nothing wedged between the manifesto's closing line and the names it
+   introduces. */
+.sign {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  /* Opaque, and the width of the column: names scroll under a bar rather than
+     behind a pill, which reads as deliberate instead of broken. */
+  background: var(--bg);
+  margin: 0 -1.5em;
+  padding: 0.9em 1.5em 1.1em;
+  box-shadow: 0 -0.9em 1em var(--bg);
+}
+
+/* The mark says which account signs, before the consent screen does. It takes
+   its colour from the button, so it inverts on hover with everything else. */
+button svg {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+}
 
 /* Phones: the title needs to stop shouting, and the table needs an escape. */
 @media (max-width: 30em) {

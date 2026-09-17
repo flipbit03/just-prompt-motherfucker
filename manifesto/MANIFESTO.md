@@ -10,7 +10,7 @@ lines changes the page's metadata. See CLAUDE.md.
 
 *Do you prompt it?*
 
-We are a community of motherfucking programmers who are told, every week, that everything we 
+We are a community of motherfucking programmers who are told, every week, that everything we
 learned the previous week about AI is obsolete.
 
 We are tired of *harness engineering*, *agent orchestration*, *spec-driven development*,
@@ -21,8 +21,6 @@ We are tired of being told our prompts are the problem, that we need a harness, 
 forty skills just to ask for what we want, by people who can't ship anything because they can't stop tricking out their coding agents... **Just Prompt, Motherfucker**.
 
 We must delete the scaffolding and let people... **Just Prompt, Motherfucker**.
-
----
 
 ## Our values
 
@@ -35,6 +33,17 @@ We must delete the scaffolding and let people... **Just Prompt, Motherfucker**.
 | Twenty MCP servers | Nineteen you never call | **Just Prompt, Motherfucker** |
 
 We believe that anyone who can explain a problem to a colleague can prompt, and that no amount of "harnessing" will save anyone who cannot. Think before you build, have a solid exchange with your agent and you're good. That's it...**Just Prompt, Motherfucker**.
+
+<!--
+The LAST non-empty line of this file is load-bearing. Once anyone has signed,
+the site appends a colon to it and lists every signature directly underneath,
+so that line has to read as an introduction to a list of people.
+
+Two consequences. Keep it a line that can introduce names — if it becomes a
+full stop, a question, or anything that cannot be followed by a list, the page
+stops making sense. And keep it last: anything added below it becomes the line
+that gets the colon instead. See CLAUDE.md.
+-->
 
 \
 Signed,\
