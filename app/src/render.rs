@@ -14,6 +14,11 @@ use crate::db::{self, Signatory};
 const MANIFESTO_MD: &str = include_str!("../../manifesto/MANIFESTO.md");
 const STYLE: &str = include_str!("../assets/style.css");
 
+/// The share card: the page's hero at 1200x630, the one size every scraper
+/// accepts. Georgia Bold 96pt over Georgia Italic 44pt, in the page's colours.
+/// Redraw it when the title or subtitle changes.
+pub const OG_IMAGE: &[u8] = include_bytes!("../assets/og.png");
+
 /// Title, subtitle and description are read out of the manifesto rather than
 /// restated here. Restating them is what let the card keep advertising an old
 /// subtitle after the document had changed.
@@ -208,26 +213,43 @@ fn head(base_url: &str, stars: Option<u64>, s: &mut String) {
     );
     let _ = writeln!(s, "<link rel=\"canonical\" href=\"{}\">", esc(&url));
 
-    // TODO: og:image once the 1200x630 PNG exists. Omitted rather than
-    // pointed at a 404 — Facebook caches a bad first scrape indefinitely.
     s.push_str("<meta property=\"og:type\" content=\"website\">\n");
     let _ = writeln!(s, "<meta property=\"og:url\" content=\"{}\">", esc(&url));
-    let _ = writeln!(
-        s,
-        "<meta property=\"og:title\" content=\"{}\">",
-        esc(&fm.title)
-    );
+    // Title and subtitle together: the whole message wherever the card's
+    // image does not load. The tab keeps the bare title.
+    let card = format!("{}. {}", esc(&fm.title), esc(&fm.subtitle));
+    let _ = writeln!(s, "<meta property=\"og:title\" content=\"{card}\">");
     let _ = writeln!(
         s,
         "<meta property=\"og:description\" content=\"{}\">",
-        esc(&fm.subtitle)
+        esc(&fm.description)
     );
     let _ = writeln!(
         s,
         "<meta property=\"og:site_name\" content=\"{}\">",
         esc(&fm.title)
     );
-    s.push_str("<meta name=\"twitter:card\" content=\"summary_large_image\">\n");
+    // Facebook and LinkedIn render the large card on the first scrape only
+    // when the dimensions are declared.
+    let _ = writeln!(
+        s,
+        "<meta property=\"og:image\" content=\"{base_url}/og.png\">\n\
+         <meta property=\"og:image:width\" content=\"1200\">\n\
+         <meta property=\"og:image:height\" content=\"630\">\n\
+         <meta property=\"og:image:type\" content=\"image/png\">\n\
+         <meta property=\"og:image:alt\" content=\"{card}\">"
+    );
+    // X falls back to the og: values today; spelling them out costs nothing
+    // and does not depend on that staying true.
+    let _ = writeln!(
+        s,
+        "<meta name=\"twitter:card\" content=\"summary_large_image\">\n\
+         <meta name=\"twitter:title\" content=\"{card}\">\n\
+         <meta name=\"twitter:description\" content=\"{}\">\n\
+         <meta name=\"twitter:image\" content=\"{base_url}/og.png\">\n\
+         <meta name=\"twitter:image:alt\" content=\"{card}\">",
+        esc(&fm.description)
+    );
 
     let _ = write!(s, "<style>\n{STYLE}</style>\n");
     s.push_str("</head>\n<body>\n");
@@ -398,7 +420,7 @@ mod tests {
         assert!(html.contains(&format!("<title>{}</title>", fm.title)));
         assert!(html.contains(&format!(
             "<meta property=\"og:description\" content=\"{}\">",
-            fm.subtitle
+            fm.description
         )));
     }
 
@@ -411,6 +433,50 @@ mod tests {
         assert!(!fm.description.starts_with("<!--"));
         assert!(!fm.description.contains("load-bearing"));
         assert!(!fm.title.is_empty() && !fm.subtitle.is_empty());
+    }
+
+    /// Facebook and LinkedIn render the large card on a first scrape only when
+    /// the dimensions travel with the image, so the declared size has to be
+    /// the size of the bytes actually served.
+    #[test]
+    fn the_card_image_is_declared_with_its_real_dimensions() {
+        let fm = front_matter();
+        let html = page("http://localhost:8100", "csrf0", None, &[]);
+        assert!(
+            html.contains("<meta property=\"og:image\" content=\"http://localhost:8100/og.png\">")
+        );
+        assert!(html.contains("<meta property=\"og:image:width\" content=\"1200\">"));
+        assert!(html.contains("<meta property=\"og:image:height\" content=\"630\">"));
+        assert!(html.contains("<meta property=\"og:image:type\" content=\"image/png\">"));
+        assert!(html.contains("<meta property=\"og:image:alt\""));
+
+        // X reads its own tags first; each mirrors the og: value beside it.
+        assert!(
+            html.contains("<meta name=\"twitter:image\" content=\"http://localhost:8100/og.png\">")
+        );
+        // The card title carries the subtitle too: it is the whole message
+        // wherever the image does not load. The tab keeps the bare title.
+        let card_title = format!("{}. {}", fm.title, fm.subtitle);
+        assert!(html.contains(&format!("<title>{}</title>", fm.title)));
+        assert!(html.contains(&format!(
+            "<meta property=\"og:title\" content=\"{card_title}\">"
+        )));
+        assert!(html.contains(&format!(
+            "<meta name=\"twitter:title\" content=\"{card_title}\">"
+        )));
+        assert!(html.contains(&format!(
+            "<meta name=\"twitter:description\" content=\"{}\">",
+            fm.description
+        )));
+        assert!(html.contains("<meta name=\"twitter:image:alt\""));
+        assert!(!html.contains("twitter:site"));
+
+        // PNG: signature, then IHDR with width and height as big-endian u32.
+        assert!(OG_IMAGE.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let dim = |at: usize| u32::from_be_bytes(OG_IMAGE[at..at + 4].try_into().unwrap());
+        assert_eq!((dim(16), dim(20)), (1200, 630));
+        // WhatsApp drops thumbnails past a few hundred KB.
+        assert!(OG_IMAGE.len() < 200 * 1024);
     }
 
     #[test]
