@@ -1,0 +1,16 @@
+# Rust
+/target
+/app/target
+/infra/rustible/target
+
+# Secrets — the OAuth client secret lives here in dev. Never committed.
+.env
+*.env
+
+# Local database and its WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+
+# The v1 HTML, kept locally as an archive
+/docs

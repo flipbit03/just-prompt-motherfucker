@@ -1,0 +1,25 @@
+# The jpmf service.
+#
+# Owned by the DEPLOY, not by Rustible: the workflow copies this file to
+# ~/.config/systemd/user/jpmf.service on every release and reloads, so a change
+# here ships with the next deploy and never needs an out-of-band infra run.
+#
+# Runs as a systemd --user unit under the `jpmf` user with lingering enabled,
+# which is what lets the deploy rewrite this file without any sudo at all.
+
+[Unit]
+Description=Just Prompt, Motherfucker
+After=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/jpmf_deploy
+EnvironmentFile=%h/jpmf_deploy/.env
+ExecStart=%h/jpmf_deploy/jpmf serve
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+
+[Install]
+# User units want default.target. multi-user.target silently never starts.
+WantedBy=default.target

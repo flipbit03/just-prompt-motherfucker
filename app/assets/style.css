@@ -1,0 +1,220 @@
+/* Inlined into <head> at build time; there is no static asset route. */
+
+/* One theme, the dark one. 14.2 contrast for body text. */
+:root {
+  color-scheme: dark;
+  --fg: #e6e4e1;
+  --bg: #15171b;
+  --rule: #444a53;
+  --th-bg: #1f232a;
+  --muted: #979da7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  max-width: 42em;
+  margin: 3em auto;
+  padding: 0 1.5em;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+  font-size: 1.2em;
+  text-align: center;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1 {
+  font-size: 3em;
+  text-align: center;
+  margin: 0;
+  line-height: 1.1;
+}
+
+/* The subtitle: the paragraph immediately after the title. */
+h1 + p {
+  text-align: center;
+  font-style: italic;
+  font-size: 1.4em;
+  margin: 0.3em 0 2em;
+}
+
+h2 {
+  font-size: 1.6em;
+  margin-top: 2em;
+  /* Headings want tighter leading than body text; inheriting 1.5 left a band
+     of space above the glyphs that read as uneven spacing after the rule. */
+  line-height: 1.2;
+}
+
+/* Unused by the manifesto as it currently reads, and kept anyway: a text edit
+   or a translation can reintroduce a list, and default list styling sits badly
+   in a centred column. */
+ul {
+  padding-left: 0;
+  list-style-position: inside;
+}
+li { margin: 0.6em 0; }
+
+a { color: var(--fg); }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5em 0;
+}
+
+th, td {
+  border: 1px solid var(--rule);
+  padding: 0.7em 0.9em;
+  text-align: center;
+  vertical-align: middle;
+}
+
+/* "They Claim You Need" has to hold one line, and so does the refrain — it is
+   the payoff of every row. The other columns give up the width. */
+th,
+td:last-child {
+  white-space: nowrap;
+}
+
+th { background: var(--th-bg); }
+
+blockquote {
+  margin: 2em 0;
+  padding: 0;
+  font-style: italic;
+}
+
+/* The signature block, appended below the manifesto. */
+
+/* No rule above this. The manifesto signs off with "And the Just Prompt
+   Motherfuckers" and these are they; a line between the two makes the list
+   read as an appendix to the signature rather than the whole of it. */
+.signatures {
+  margin-top: 1em;
+}
+
+.count {
+  color: var(--muted);
+  font-style: italic;
+  margin-top: -0.4em;
+}
+
+/* The names flow straight out of the manifesto's closing line, wrapping as
+   many to a row as fit, rather than sitting in a list of their own. */
+.signers {
+  list-style: none;
+  padding: 0;
+  margin: 0.8em 0 1.6em;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* The row pitch matches a paragraph's line pitch, plus a hair. The names are
+     part of the manifesto, not a list attached to it. */
+  gap: 0.15em 1.2em;
+  line-height: 1.5;
+}
+
+/* The generic `li` margin is for prose lists; here it doubles the row pitch. */
+.signers li { margin: 0; }
+
+.signers a { text-decoration: none; }
+.signers a:hover { text-decoration: underline; }
+
+.signers .n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.35em;
+  font-size: 0.85em;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: inherit;
+  font-size: 1.05em;
+  padding: 0.6em 1.4em;
+  background: var(--fg);
+  color: var(--bg);
+  border: 2px solid var(--fg);
+  cursor: pointer;
+}
+
+button:hover { background: var(--bg); color: var(--fg); }
+
+/* The list grows without bound, so the button would sink further down the page
+   with every signature. Sticky keeps it within reach while the names are on
+   screen and lets it settle into place at the end — no duplicate button, and
+   nothing wedged between the manifesto's closing line and the names it
+   introduces. */
+.sign {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  /* Opaque, and the width of the column: names scroll under a bar rather than
+     behind a pill, which reads as deliberate instead of broken. */
+  background: var(--bg);
+  margin: 0 -1.5em;
+  padding: 0.9em 1.5em 1.1em;
+  box-shadow: 0 -0.9em 1em var(--bg);
+}
+
+/* The mark says which account signs, before the consent screen does. It takes
+   its colour from the button, so it inverts on hover with everything else. */
+button svg {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
+}
+
+/* Phones: the title needs to stop shouting, and the table needs an escape. */
+@media (max-width: 30em) {
+  /* Enough head room that the corner button never lands on the title. */
+  body { margin: 3.4em auto 1.5em; font-size: 1.05em; }
+  h1 { font-size: 2.1em; }
+  h1 + p { font-size: 1.2em; }
+  .signers { columns: 1; }
+  table { display: block; overflow-x: auto; }
+}
+
+/* A real form, but it should read as an aside, not a second button. */
+.unsign { margin-top: 1.2em; }
+
+.unsign button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.unsign button:hover { background: none; color: var(--fg); }
+
+/* Follows the reader down the page. Opaque, because the manifesto scrolls
+   underneath it. */
+.gh {
+  position: fixed;
+  top: 1.1rem;
+  right: 1.25rem;
+  z-index: 10;
+  background: var(--bg);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.3em 0.7em;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 0.82em;
+  line-height: 1;
+  text-decoration: none;
+  color: var(--fg);
+}
+
+.gh:hover { background: var(--th-bg); }
+.gh svg { display: block; }
