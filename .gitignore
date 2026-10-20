@@ -1,7 +1,6 @@
 # Rust
 /target
 /app/target
-/infra/rustible/target
 
 # Secrets — the OAuth client secret lives here in dev. Never committed.
 .env
