@@ -14,7 +14,6 @@ app/                     the whole website — one crate, ~2,000 lines
   src/github.rs          OAuth against GitHub
   src/cookies.rs         the two CSRF defences
   assets/style.css       inlined into <head> at build time
-infra/rustible/          provisions the host (Rustible, not Ansible)
 infra/jpmf.service       systemd unit, shipped by the deploy
 .github/workflows/       ci.yml, deploy.yml
 ```
@@ -140,11 +139,13 @@ repository secrets, `systemctl --user restart`, then poll `/healthz`.
 
 Secrets: `DEPLOY_SSH_KEY`, `JPMF_CLIENT_ID`, `JPMF_CLIENT_SECRET`.
 
-[`infra/rustible/`](infra/rustible/) provisions what a deploy cannot renew — the `jpmf` user, the
-deploy key, `enable-linger`, and `/etc/caddy/conf.d/jpmf.caddy`. Run it with
-`rustible playbook run playbooks/jpmf.rs`; it is idempotent. Rustible is an
-Ansible replacement whose playbooks are Rust: https://github.com/flipbit03/rustible The host's Caddyfile
-imports `conf.d/*.caddy`, and this project owns exactly one file in there.
+The host side lives in [my_infra](https://github.com/flipbit03/my_infra), not
+here: its Rustible playbook `outpost/jpmf` provisions what a deploy cannot renew
+— the `jpmf` user, its SSH keys (the deploy key and Cadu's), `enable-linger`,
+and `/etc/caddy/conf.d/jpmf.caddy`. Run it from `my_infra/rustible` with
+`rustible playbook run outpost/jpmf`; it is idempotent. The host's Caddyfile
+imports `conf.d/*.caddy`, and jpmf owns exactly one file in there. This repo
+keeps the app deploy (`deploy.yml`) and the unit it ships, `infra/jpmf.service`.
 
 ## Gotchas
 
